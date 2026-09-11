@@ -128,18 +128,12 @@ class App {
       const savedCombos = localStorage.getItem(LS_COMBOS);
       if (savedBank) {
         const parsed = JSON.parse(savedBank);
-        if (Array.isArray(parsed) && parsed.length > 0) {
+        if (Array.isArray(parsed)) {
           this.session.sessionBank = parsed;
           this.session.totalSessionCombinations = Number(savedCombos) || 0;
-          this._updateBankUI();
-          if (this.el.statSessionCombos) {
-            this.el.statSessionCombos.textContent = fmt(this.session.totalSessionCombinations);
-          }
-          if (this.el.statBlocksMined) {
-            this.el.statBlocksMined.textContent = fmt(this.session.totalMinedBlocks);
-          }
         }
       }
+      this.refreshSessionUI();
     } catch (e) {
       console.warn('Could not restore local session:', e);
     }
@@ -186,12 +180,18 @@ class App {
   // ── State loading ──────────────────────────────────────────────────────────
 
   async loadState() {
+    // loadInitialData replaces its completed-task set with the remote ledger.
+    // Keep local completions too, so a reload cannot mine a just-finished task
+    // again before it has been banked and verified remotely.
+    const localCompleted = new Set(this.session.completedTasks);
     try {
       const init = await this.session.loadInitialData();
+      for (const id of localCompleted) this.session.completedTasks.add(id);
       if (this.el.statContext && init?.context) {
         this.el.statContext.textContent = init.context;
       }
     } catch (err) {
+      for (const id of localCompleted) this.session.completedTasks.add(id);
       console.warn('Notice: Failed loading initial state, continuing with defaults:', err);
     }
 
@@ -558,6 +558,7 @@ class App {
   handleTaskCompleted(result, elapsedMs) {
     if (!result) return;
     const recorded = this.session.recordTaskResult(result);
+    if (recorded.duplicate) return;
 
     // Instantaneous rate
     const elapsed = Math.max(elapsedMs || 100, 10) / 1000;
@@ -568,12 +569,7 @@ class App {
       this.recentRates.reduce((a, b) => a + b, 0) / this.recentRates.length
     );
 
-    if (this.el.statSessionCombos) {
-      this.el.statSessionCombos.textContent = fmt(this.session.totalSessionCombinations);
-    }
-    if (this.el.statBlocksMined) {
-      this.el.statBlocksMined.textContent = fmt(this.session.totalMinedBlocks);
-    }
+    this.refreshSessionUI();
     if (this.el.statRate) {
       this.el.statRate.textContent = `${fmt(avgRate)} combos/s`;
     }
@@ -629,6 +625,20 @@ class App {
         this.el.syncState.textContent = '0 blocks mined · ready to mine';
       }
     }
+  }
+
+  // Keep the visible counters and the actionable Bank Work state in sync.
+  // This is also called after restoring localStorage, before any new task
+  // completes, which fixes banked work appearing as zero after a reload.
+  refreshSessionUI() {
+    if (this.el.statSessionCombos) {
+      this.el.statSessionCombos.textContent = fmt(this.session.totalSessionCombinations);
+    }
+    if (this.el.statBlocksMined) {
+      this.el.statBlocksMined.textContent = fmt(this.session.totalMinedBlocks);
+    }
+    this.updateGlobalCounter();
+    this._updateBankUI();
   }
 
   sampleGraphPoint(force = false) {

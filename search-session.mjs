@@ -207,6 +207,19 @@ export class SearchSession {
   recordTaskResult(result) {
     const task = result.task;
     const tid = result.id;
+
+    // A worker can finish just after a pause/restart transition.  Never add
+    // the same completed task twice: apart from inflating the block counter,
+    // a duplicate here makes the compact range report invalid.
+    if (this.completedTasks.has(tid)) {
+      return {
+        taskId: tid,
+        combinations: 0,
+        bankSize: this.totalMinedBlocks,
+        totalCombinations: this.totalSessionCombinations,
+        duplicate: true,
+      };
+    }
     this.completedTasks.add(tid);
 
     const combos =
