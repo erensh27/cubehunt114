@@ -24,9 +24,16 @@ class App {
 
     // Visual telemetry buffer
     this.vizHistory = [];
+    this.lastTaskStatus = 'STANDBY';
     this.activeFilterCounters = {
       generators: 0,
       quotient_points: 0,
+      rejected_mod243: 0,
+      rejected_parity: 0,
+      rejected_prime: 0,
+      exact_tests: 0,
+    };
+    this.sessionFilterCounters = {
       rejected_mod243: 0,
       rejected_parity: 0,
       rejected_prime: 0,
@@ -273,6 +280,14 @@ class App {
 
       // Update visual telemetry buffer
       this.activeFilterCounters = { ...result.counters };
+      for (const k of ['rejected_mod243', 'rejected_parity', 'rejected_prime', 'exact_tests']) {
+        this.sessionFilterCounters[k] += result.counters[k] || 0;
+      }
+      if (result.counters.curves > 0) {
+        this.lastTaskStatus = `ACTIVE CURVE (${result.counters.quotient_points.toLocaleString()} PTS)`;
+      } else {
+        this.lastTaskStatus = `SHELL EXCLUSION (${result.counters.generators.toLocaleString()} GEN)`;
+      }
       this.vizHistory.push({
         time: performance.now(),
         rate: avgRate,
@@ -359,34 +374,40 @@ class App {
       ctx.stroke();
     }
 
-    // Top: Sieve Filter Waterfall Breakdown
+    // Top: Sieve Filter Waterfall Breakdown (Session Cumulative)
     const topH = h * 0.45;
     const padding = 20;
     const barWidth = (w - padding * 2) / 4 - 10;
     const filters = [
-      { label: 'MOD-243 SIEVE', val: this.activeFilterCounters.rejected_mod243, color: '#38bdf8' },
-      { label: 'PARITY FILTER', val: this.activeFilterCounters.rejected_parity, color: '#818cf8' },
-      { label: 'PRIME QR SIEVE', val: this.activeFilterCounters.rejected_prime, color: '#f59e0b' },
-      { label: 'EXACT SQRT', val: this.activeFilterCounters.exact_tests, color: '#10b981' },
+      { label: 'MOD-243 SIEVE', val: this.sessionFilterCounters.rejected_mod243, color: '#38bdf8' },
+      { label: 'PARITY FILTER', val: this.sessionFilterCounters.rejected_parity, color: '#818cf8' },
+      { label: 'PRIME QR SIEVE', val: this.sessionFilterCounters.rejected_prime, color: '#f59e0b' },
+      { label: 'EXACT SQRT', val: this.sessionFilterCounters.exact_tests, color: '#10b981' },
     ];
 
     const maxVal = Math.max(1, ...filters.map(f => f.val));
 
+    // Status banner at top right of canvas
+    ctx.fillStyle = '#64748b';
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(`STATUS: ${this.lastTaskStatus}`, w - padding, 18);
+
     filters.forEach((f, i) => {
       const bx = padding + i * (barWidth + 10);
-      const barH = (f.val / maxVal) * (topH - 50);
-      const by = topH - barH - 10;
+      const barH = (f.val / maxVal) * (topH - 52);
+      const by = topH - barH - 8;
 
       // Label
       ctx.fillStyle = '#64748b';
       ctx.font = '10px monospace';
       ctx.textAlign = 'left';
-      ctx.fillText(f.label, bx, 20);
+      ctx.fillText(f.label, bx, 18);
 
       // Value
       ctx.fillStyle = '#cbd5e1';
       ctx.font = 'bold 12px monospace';
-      ctx.fillText(fmt(f.val), bx, 35);
+      ctx.fillText(fmt(f.val), bx, 32);
 
       // Bar
       ctx.fillStyle = f.color;

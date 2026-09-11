@@ -82,20 +82,31 @@ export class SearchSession {
     };
   }
 
-  isRowCompleted(context, row) {
-    const candidateId = `${context}:${row}:0`;
-    return this.completedTasks.has(`114-engine-v1:${candidateId}`);
-  }
-
   getNextTask() {
-    // Scan forward in active context for the next uncompleted row
-    const ctx = this.activeContext;
-    while (this.isRowCompleted(ctx, this.currentRow)) {
-      this.currentRow += ROWS_PER_TASK;
+    // Sample tasks across the 81 contexts and full lattice domain (matching math-gambling protocol)
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const c = CONTEXTS[Math.floor(Math.random() * CONTEXTS.length)];
+      const totalTasks = BigInt(c.rowTasks);
+      // Uniform random 53-bit integer scaled to total row tasks
+      const rFraction = Math.random();
+      const rowTaskIdx = BigInt(Math.floor(rFraction * Number(totalTasks > 1000000000n ? 1000000000 : Number(totalTasks))));
+      const row = (rowTaskIdx * BigInt(c.rowStride)).toString();
+      const block = Math.floor(Math.random() * c.blocks);
+
+      const candidate = makeTask(c.id, row, block);
+      const tid = taskId(candidate);
+
+      if (!this.completedTasks.has(tid)) {
+        this.activeContext = c.id;
+        this.currentRow = row;
+        return candidate;
+      }
     }
 
-    const task = makeTask(ctx, String(this.currentRow), 0);
-    this.currentRow += ROWS_PER_TASK;
+    // Fallback: sequential search in active context
+    const c = CONTEXTS.find(x => x.id === this.activeContext) || CONTEXTS[0];
+    const task = makeTask(c.id, String(this.currentRow), 0);
+    this.currentRow = (BigInt(this.currentRow) + BigInt(ROWS_PER_TASK)).toString();
     return task;
   }
 
