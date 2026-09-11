@@ -19,22 +19,34 @@ export class SearchSession {
   }
 
   async loadInitialData() {
+    const tryFetch = async filename => {
+      const paths = [
+        `./data/${filename}`,
+        `/data/${filename}`,
+        `../data/${filename}`,
+        `data/${filename}`
+      ];
+      for (const p of paths) {
+        try {
+          const res = await fetch(p, { cache: 'no-cache' });
+          if (res.ok) return await res.json();
+        } catch {}
+      }
+      return null;
+    };
+
     try {
-      const [completedResp, blocksResp] = await Promise.all([
-        fetch(this.baseUrl + 'data/completed.json', { cache: 'no-cache' }),
-        fetch(this.baseUrl + 'data/blocks.json', { cache: 'no-cache' }),
+      const [completedData, blocksData] = await Promise.all([
+        tryFetch('completed.json'),
+        tryFetch('blocks.json')
       ]);
 
-      if (completedResp.ok) {
-        const completedData = await completedResp.json();
-        if (Array.isArray(completedData.tasks)) {
-          this.completedTasks = new Set(completedData.tasks);
-        }
+      if (completedData && Array.isArray(completedData.tasks)) {
+        this.completedTasks = new Set(completedData.tasks);
       }
 
-      if (blocksResp.ok) {
-        const blocksData = await blocksResp.json();
-        this.frontiers = blocksData.frontiers || {};
+      if (blocksData && blocksData.frontiers) {
+        this.frontiers = blocksData.frontiers;
       }
     } catch (err) {
       console.warn('Notice: Could not load remote state files, falling back to local session state:', err);

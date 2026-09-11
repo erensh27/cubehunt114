@@ -75,7 +75,8 @@ class App {
 
   initWorker() {
     try {
-      this.worker = new Worker('./search-worker.mjs', { type: 'module' });
+      const workerUrl = new URL('./search-worker.mjs', import.meta.url);
+      this.worker = new Worker(workerUrl, { type: 'module' });
       this.worker.onmessage = this.handleWorkerMessage.bind(this);
     } catch (err) {
       console.error('Failed to initialize Web Worker:', err);
@@ -93,21 +94,35 @@ class App {
   }
 
   async refreshLeaderboard() {
+    const tryFetch = async filename => {
+      const paths = [
+        `./data/${filename}`,
+        `/data/${filename}`,
+        `../data/${filename}`,
+        `data/${filename}`
+      ];
+      for (const p of paths) {
+        try {
+          const res = await fetch(p, { cache: 'no-cache' });
+          if (res.ok) return await res.json();
+        } catch {}
+      }
+      return null;
+    };
+
     try {
-      const [lbResp, statsResp] = await Promise.all([
-        fetch('./data/leaderboard.json', { cache: 'no-cache' }),
-        fetch('./data/stats.json', { cache: 'no-cache' }),
+      const [lb, stats] = await Promise.all([
+        tryFetch('leaderboard.json'),
+        tryFetch('stats.json')
       ]);
 
-      if (statsResp.ok) {
-        const stats = await statsResp.json();
+      if (stats) {
         this.globalBaseCombinations = stats.total_combinations || 0;
         this.globalBaseTasks = stats.total_verified_tasks || 0;
         this.updateGlobalCounter();
       }
 
-      if (lbResp.ok) {
-        const lb = await lbResp.json();
+      if (lb) {
         this.renderLeaderboard(lb.contributors || []);
       }
     } catch (err) {
