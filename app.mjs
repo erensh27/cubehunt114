@@ -713,29 +713,75 @@ class App {
     const repoName = localStorage.getItem('114-repo-name') || REPO_NAME;
     const repoBase = `https://github.com/${repoOwner}/${repoName}`;
 
-    const report = this.session.formatReportBlock(contributor, github);
+    const reports = this.session.formatReportBlock(contributor, github);
 
-    if (!report) {
+    if (!reports) {
       this.el.reportTitle.value = '[REPORT] Session Ready';
-      this.el.reportBody.value = 'No mined blocks in current session yet. Click "Start Mining" to compute blocks, or visit GitHub Issues to view community submissions.';
-      this.el.reportCopyStatus.textContent = 'No blocks mined yet. Start compute to generate verifiable blocks.';
+      this.el.reportBody.value = 'No mined blocks in current session yet. Click "Start Mining" to compute blocks.';
+      this.el.reportCopyStatus.textContent = 'No blocks mined yet.';
       this.el.btnGithubIssue.href = `${repoBase}/issues`;
       this.el.modalReport.classList.remove('hidden');
       return;
     }
 
-    this.el.reportTitle.value = report.title;
-    this.el.reportBody.value = report.body;
-    this.el.reportCopyStatus.textContent = '1. Click "Copy Report" (or it auto-copies). 2. Click "Open GitHub Issue ↗" and paste (Ctrl+V) into the issue description.';
+    // formatReportBlock always returns an array now
+    const reportList = Array.isArray(reports) ? reports : [reports];
+    this._reportParts   = reportList;
+    this._reportPartIdx = 0;
+    const isMultiPart = reportList.length > 1;
 
-    // Construct issue URL with template and title (payload is copied via clipboard to avoid HTTP 414 length limits)
-    const issueUrl = `${repoBase}/issues/new?template=report.yml&title=${encodeURIComponent(report.title)}`;
-    this.el.btnGithubIssue.href = issueUrl;
+    const showPart = (idx) => {
+      const p = reportList[idx];
+      this.el.reportTitle.value = p.title;
+      this.el.reportBody.value  = p.body;
+      const issueUrl = `${repoBase}/issues/new?template=report.yml&title=${encodeURIComponent(p.title)}`;
+      this.el.btnGithubIssue.href = issueUrl;
+      navigator.clipboard?.writeText?.(p.body).catch(() => {});
 
-    // Auto-copy report to clipboard immediately upon opening modal
-    navigator.clipboard?.writeText?.(report.body).then(() => {
-      this.el.reportCopyStatus.textContent = 'Copied to clipboard! Now click "2. Open GitHub Issue ↗" and paste (Ctrl+V) into the issue description.';
-    }).catch(() => {});
+      const btnNext = document.getElementById('btn-next-part');
+      if (btnNext) {
+        btnNext.textContent = idx < reportList.length - 1
+          ? `Next Part → (${idx + 2}/${reportList.length})`
+          : `↩ Back to Part 1`;
+        btnNext.style.display = isMultiPart ? '' : 'none';
+      }
+
+      if (isMultiPart) {
+        this.el.reportCopyStatus.textContent =
+          `Part ${idx + 1} of ${reportList.length} — copied! Open a GitHub Issue and paste, ` +
+          `then click "Next Part" to get the next chunk.`;
+      } else {
+        this.el.reportCopyStatus.textContent =
+          'Copied to clipboard! Click "Open GitHub Issue ↗" and paste (Ctrl+V).';
+      }
+    };
+
+    // Ensure the "Next Part" button exists
+    if (!document.getElementById('btn-next-part')) {
+      const btn = document.createElement('button');
+      btn.id = 'btn-next-part';
+      btn.className = 'btn';
+      btn.style.marginLeft = '8px';
+      btn.addEventListener('click', () => {
+        this._reportPartIdx =
+          this._reportPartIdx < this._reportParts.length - 1
+            ? this._reportPartIdx + 1
+            : 0;
+        showPart(this._reportPartIdx);
+      });
+      this.el.btnCopyReport.parentNode.insertBefore(btn, this.el.btnCopyReport.nextSibling);
+    }
+
+    showPart(0);
+
+    if (!isMultiPart) {
+      this.el.reportCopyStatus.textContent =
+        '1. Click "Copy Report" (or it auto-copies). 2. Click "Open GitHub Issue ↗" and paste (Ctrl+V).';
+    } else {
+      this.el.reportCopyStatus.textContent =
+        `⚠️ ${this.session.sessionBank.length} blocks split into ${reportList.length} parts — ` +
+        `submit each as a separate GitHub Issue using "Next Part →".`;
+    }
 
     this.el.modalReport.classList.remove('hidden');
   }

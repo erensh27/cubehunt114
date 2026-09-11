@@ -6,6 +6,9 @@
 import { CONTEXTS, makeTask, taskId, ROWS_PER_TASK } from './engine.mjs';
 
 export class SearchSession {
+  // Max tasks per GitHub issue – keeps body well under the 64 KB hard limit.
+  static MAX_TASKS_PER_REPORT = 40;
+
   constructor(baseUrl = './') {
     this.baseUrl = baseUrl.endsWith('/') ? baseUrl : baseUrl + '/';
     this.completedTasks = new Set();
@@ -98,7 +101,7 @@ export class SearchSession {
   }
 
   getNextTask() {
-    // Sample tasks across the 81 contexts and full lattice domain (matching math-gambling protocol)
+    // Sample tasks across the 81 contexts and full lattice domain
     for (let attempt = 0; attempt < 50; attempt++) {
       try {
         const c = CONTEXTS[Math.floor(Math.random() * CONTEXTS.length)];
@@ -122,7 +125,6 @@ export class SearchSession {
     // Fallback: sequential search in active context
     const c = CONTEXTS.find(x => x.id === this.activeContext) || CONTEXTS[0];
     let r = BigInt(this.currentRow || 0);
-    // Align to rowStride
     r = (r / BigInt(ROWS_PER_TASK)) * BigInt(ROWS_PER_TASK);
     if (r >= BigInt(c.totalRows)) r = 0n;
     const task = makeTask(c.id, r.toString(), 0);
@@ -152,7 +154,6 @@ export class SearchSession {
       digest: result.digest,
       combinations: combos,
       solution: solString,
-      best_delta: this.bestSessionCandidate?.delta || null,
     });
 
     return {
@@ -163,55 +164,73 @@ export class SearchSession {
     };
   }
 
+  /**
+   * Formats the session bank into one or more report objects ready to be
+   * pasted into GitHub Issues.
+   *
+   * Returns an array (always). Each element is one GitHub issue's worth of
+   * data: { title, body, partIndex, totalParts, chunkSize }.
+   *
+   * The body contains ONLY what the verifier needs: task definition + digest.
+   * All other fields (combinations, solution) are recomputed server-side from
+   * the canonical Python replay, so omitting them shrinks the payload
+   * dramatically without losing any information.
+   */
   formatReportBlock(contributorName = 'Anonymous', githubHandle = '') {
     if (this.sessionBank.length === 0) return null;
 
-    const reportObj = {
-      schema: '114-report-v1',
-      contributor: {
-        name: contributorName.trim() || 'Anonymous',
-        github: githubHandle.replace('@', '').trim(),
-      },
-      tasks: this.sessionBank,
+    const contributor = {
+      name: (contributorName.trim() || 'Anonymous').slice(0, 64),
+      github: githubHandle.replace(/^@/, '').trim().slice(0, 64),
     };
-
-    const firstTask = this.sessionBank[0].task;
-    const taskCount = this.sessionBank.length;
     const totalCombos = this.sessionBank.reduce((acc, t) => acc + t.combinations, 0);
+    const bank = this.sessionBank;
+    const chunkSize = SearchSession.MAX_TASKS_PER_REPORT;
 
-    const issueTitle = `[REPORT] ${firstTask.context} (row ${firstTask.row}, ${taskCount} block${taskCount > 1 ? 's' : ''})`;
+    // Split into chunks of chunkSize
+    const chunks = [];
+    for (let i = 0; i < bank.length; i += chunkSize) {
+      chunks.push(bank.slice(i, i + chunkSize));
+    }
+    const totalParts = chunks.length;
 
-    const compactBody = [
-      `### Search Verification Report`,
-      `- Contributor: **${reportObj.contributor.name}** (@${reportObj.contributor.github || 'anonymous'})`,
-      `- Verified Blocks Mined: \`${taskCount}\``,
-      `- Total Combinations Evaluated: \`${totalCombos.toLocaleString()}\``,
-      ``,
-      `<!-- 114-report-v1 -->`,
-      `contributor: ${reportObj.contributor.name}`,
-      `github: ${reportObj.contributor.github}`,
-      `context: ${firstTask.context}`,
-      `row: ${firstTask.row}`,
-      `block: ${firstTask.block}`,
-      `digest: ${this.sessionBank[0].digest}`,
-      `combinations: ${totalCombos}`,
-      `<!-- end-114-report -->`,
-    ].join('\n');
+    return chunks.map((chunk, partIdx) => {
+      const firstTask = chunk[0].task;
+      const chunkCombos = chunk.reduce((a, t) => a + t.combinations, 0);
+      const partSuffix = totalParts > 1 ? ` part ${partIdx + 1}/${totalParts}` : '';
+      const title = `[REPORT] ${firstTask.context} (${chunk.length} block${chunk.length > 1 ? 's' : ''}${partSuffix})`;
 
-    const markdownBody = [
-      compactBody,
-      ``,
-      `\`\`\`json`,
-      JSON.stringify(reportObj, null, 2),
-      `\`\`\``,
-    ].join('\n');
+      // Compact tasks: only the fields the verifier needs.
+      // combinations and solution are recomputed server-side from the replay.
+      const compactTasks = chunk.map(t => ({ task: t.task, digest: t.digest }));
 
-    return {
-      title: issueTitle,
-      body: markdownBody,
-      compactBody: compactBody,
-      json: reportObj,
-    };
+      const reportObj = {
+        schema: '114-report-v1',
+        contributor,
+        tasks: compactTasks,
+      };
+
+      // Single-line (minified) JSON keeps the body as small as possible.
+      const jsonStr = JSON.stringify(reportObj);
+
+      const header = [
+        `### Search Verification Report`,
+        `- Contributor: **${contributor.name}** (@${contributor.github || 'anonymous'})`,
+        `- Blocks: \`${chunk.length}\`` + (totalParts > 1 ? ` (part ${partIdx + 1} of ${totalParts})` : ''),
+        `- Combinations in this batch: \`${chunkCombos.toLocaleString()}\``,
+        totalParts > 1 ? `- Total session combinations: \`${totalCombos.toLocaleString()}\`` : '',
+      ].filter(Boolean).join('\n');
+
+      const body = [
+        header,
+        '',
+        '```json',
+        jsonStr,
+        '```',
+      ].join('\n');
+
+      return { title, body, partIndex: partIdx, totalParts, chunkSize: chunk.length };
+    });
   }
 
   clearBank() {

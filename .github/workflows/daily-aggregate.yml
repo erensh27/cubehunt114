@@ -34,6 +34,6 @@ jobs:
         run: |
           git config user.name "114-bot"
           git config user.email "bot@project114.internal"
-          git add data/leaderboard.json data/stats.json
+          git add data/
           git diff --cached --quiet || git commit -m "chore: 24h leaderboard and counts aggregation"
           git push origin main

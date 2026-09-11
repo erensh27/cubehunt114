@@ -56,6 +56,13 @@ jobs:
           # keeps our commit on top so the push is always a fast-forward).
           git pull --rebase origin main
 
+          # Immediately recompute leaderboard + stats so the website global
+          # counter updates right after this verification, not 24h later.
+          python3 tools/aggregate_stats.py
+
+          git add data/
+          git diff --cached --quiet || git commit --amend --no-edit
+
           git push origin main
 
           # Write comment body to a temp file to avoid shell-expansion issues
