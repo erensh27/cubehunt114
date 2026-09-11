@@ -46,10 +46,10 @@ class App {
     this.GRAPH_INTERVAL_MS = 4500; // 4.5 second cadence
 
     this.initElements();
-    this.initWorker();
     this.loadSavedIdentity();
-    this.loadState();
     this.bindEvents();
+    this.initWorker();
+    this.loadState();
 
     window.addEventListener('resize', () => this.renderPulseGraph());
   }
@@ -103,19 +103,27 @@ class App {
       const workerUrl = new URL('./search-worker.mjs', import.meta.url);
       this.worker = new Worker(workerUrl, { type: 'module' });
       this.worker.onmessage = this.handleWorkerMessage.bind(this);
+      this.worker.onerror = err => {
+        console.error('Worker runtime error:', err);
+        if (this.el.statusText) this.el.statusText.textContent = 'WORKER ERROR';
+      };
     } catch (err) {
       console.error('Failed to initialize Web Worker:', err);
-      this.el.statusText.textContent = 'WORKER INIT FAILED';
+      if (this.el.statusText) this.el.statusText.textContent = 'WORKER INIT FAILED';
     }
   }
 
   async loadState() {
-    const init = await this.session.loadInitialData();
-    this.el.statContext.textContent = init.context;
-    this.el.statRow.textContent = fmt(init.startRow);
-
-    // Fetch and render leaderboard and stats
-    await this.refreshLeaderboard();
+    try {
+      const init = await this.session.loadInitialData();
+      if (this.el.statContext && init?.context) {
+        this.el.statContext.textContent = init.context;
+      }
+      // Fetch and render leaderboard and stats
+      await this.refreshLeaderboard();
+    } catch (err) {
+      console.warn('Notice: Failed loading initial state, continuing with defaults:', err);
+    }
   }
 
   async refreshLeaderboard() {
@@ -250,10 +258,12 @@ class App {
   start() {
     this.isRunning = true;
     this.saveIdentity();
-    this.el.statusIndicator.className = 'indicator running';
-    this.el.statusText.textContent = 'MINING ACTIVE';
-    this.el.btnToggle.textContent = 'PAUSE COMPUTE';
-    this.el.btnToggle.classList.add('active');
+    if (this.el.statusIndicator) this.el.statusIndicator.className = 'indicator running';
+    if (this.el.statusText) this.el.statusText.textContent = 'MINING ACTIVE';
+    if (this.el.btnToggle) {
+      this.el.btnToggle.textContent = 'PAUSE COMPUTE';
+      this.el.btnToggle.classList.add('active');
+    }
 
     const now = Date.now();
     if (!this.sessionStartTimestamp) {
@@ -276,16 +286,21 @@ class App {
     clearInterval(this.elapsedTimer);
     this.elapsedTimer = setInterval(() => this.updateElapsed(), 1000);
 
-    this.worker.postMessage({ cmd: 'start', throttleMs: this.dutyThrottle });
+    if (!this.worker) this.initWorker();
+    if (this.worker) {
+      this.worker.postMessage({ cmd: 'start', throttleMs: this.dutyThrottle });
+    }
     this.dispatchNextTask();
   }
 
   stop() {
     this.isRunning = false;
-    this.el.statusIndicator.className = 'indicator idle';
-    this.el.statusText.textContent = 'MINING PAUSED';
-    this.el.btnToggle.textContent = 'RESUME MINING';
-    this.el.btnToggle.classList.remove('active');
+    if (this.el.statusIndicator) this.el.statusIndicator.className = 'indicator idle';
+    if (this.el.statusText) this.el.statusText.textContent = 'MINING PAUSED';
+    if (this.el.btnToggle) {
+      this.el.btnToggle.textContent = 'RESUME MINING';
+      this.el.btnToggle.classList.remove('active');
+    }
 
     clearInterval(this.graphTimer);
     this.graphTimer = null;
@@ -297,7 +312,9 @@ class App {
     if (this.el.statGraphRate) this.el.statGraphRate.textContent = 'Paused';
     if (this.el.statRate) this.el.statRate.textContent = '0 combos/s';
 
-    this.worker.postMessage({ cmd: 'stop' });
+    if (this.worker) {
+      this.worker.postMessage({ cmd: 'stop' });
+    }
   }
 
   updateElapsed() {
@@ -310,8 +327,12 @@ class App {
 
   dispatchNextTask() {
     if (!this.isRunning) return;
+    if (!this.worker) this.initWorker();
+    if (!this.worker) return;
     const task = this.session.getNextTask();
-    if (this.el.statContext) this.el.statContext.textContent = task.context;
+    if (this.el.statContext && task?.context) {
+      this.el.statContext.textContent = task.context;
+    }
     this.worker.postMessage({ cmd: 'run_task', task });
   }
 
@@ -341,11 +362,19 @@ class App {
 
       this.updateGlobalCounter();
 
+      // Immediate first graph point so SVG chart renders on first completed block
+      if (this.graphPoints.length < 2) {
+        this.graphPoints.push({ at: Date.now(), rate: Math.max(1, avgRate) });
+        this.renderPulseGraph();
+      }
+
       // Update submit/bank UI once at least 1 block is mined
       const count = recorded.bankSize;
       if (count > 0) {
-        this.el.btnSubmit.disabled = false;
-        this.el.btnSubmit.textContent = `Bank Work (${count} block${count > 1 ? 's' : ''}) ↗`;
+        if (this.el.btnSubmit) {
+          this.el.btnSubmit.disabled = false;
+          this.el.btnSubmit.textContent = `Bank Work (${count} block${count > 1 ? 's' : ''}) ↗`;
+        }
         if (this.el.syncState) {
           this.el.syncState.textContent = `${count} block${count > 1 ? 's' : ''} mined · ready to submit to GitHub`;
         }
@@ -353,7 +382,9 @@ class App {
         const repoOwner = localStorage.getItem('114-repo-owner') || REPO_OWNER;
         const repoName = localStorage.getItem('114-repo-name') || REPO_NAME;
         const defaultTitle = `[REPORT] ${result.task.context} (${count} block${count > 1 ? 's' : ''})`;
-        this.el.btnGithubIssue.href = `https://github.com/${repoOwner}/${repoName}/issues/new?template=report.yml&title=${encodeURIComponent(defaultTitle)}`;
+        if (this.el.btnGithubIssue) {
+          this.el.btnGithubIssue.href = `https://github.com/${repoOwner}/${repoName}/issues/new?template=report.yml&title=${encodeURIComponent(defaultTitle)}`;
+        }
       }
 
       // Check if sample cadence reached
@@ -399,7 +430,9 @@ class App {
     if (!el) return;
 
     if (this.graphPoints.length < 2) {
-      el.innerHTML = '<p class="empty-state">No compute running. Start mining to plot throughput.</p>';
+      el.innerHTML = this.isRunning
+        ? '<p class="empty-state" style="color: var(--accent-cyan);">Mining active. Plotting measured throughput (4.5s cadence)...</p>'
+        : '<p class="empty-state">Compute standby. Click "Start Mining" to begin distributed search.</p>';
       return;
     }
 

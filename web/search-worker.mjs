@@ -18,7 +18,7 @@ self.onmessage = async ({ data }) => {
   } else if (data.cmd === 'set_duty') {
     throttleMs = data.throttleMs || 0;
   } else if (data.cmd === 'run_task') {
-    if (!running) return;
+    running = true;
 
     const task = data.task;
     const t0 = performance.now();
