@@ -125,17 +125,16 @@ class App {
       const savedBank   = localStorage.getItem(LS_BANK);
       const savedCombos = localStorage.getItem(LS_COMBOS);
       if (savedBank) {
-        const bank = JSON.parse(savedBank);
-        if (Array.isArray(bank) && bank.length > 0) {
-          this.session.sessionBank = bank;
+        const parsed = JSON.parse(savedBank);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          this.session.sessionBank = parsed;
           this.session.totalSessionCombinations = Number(savedCombos) || 0;
           this._updateBankUI();
-          // Also update combo counter in UI
           if (this.el.statSessionCombos) {
             this.el.statSessionCombos.textContent = fmt(this.session.totalSessionCombinations);
           }
           if (this.el.statBlocksMined) {
-            this.el.statBlocksMined.textContent = fmt(bank.length);
+            this.el.statBlocksMined.textContent = fmt(this.session.totalMinedBlocks);
           }
         }
       }
@@ -147,13 +146,12 @@ class App {
   saveLocalSession() {
     try {
       const ids = [...this.session.completedTasks];
-      // Trim to avoid localStorage quota; keep the most recent 5000 task IDs
-      const trimmed = ids.length > 5000 ? ids.slice(ids.length - 5000) : ids;
+      const trimmed = ids.length > 2000 ? ids.slice(ids.length - 2000) : ids;
       localStorage.setItem(LS_COMPLETED, JSON.stringify(trimmed));
-      localStorage.setItem(LS_BANK, JSON.stringify(this.session.sessionBank));
+      localStorage.setItem(LS_BANK, JSON.stringify(this.session.segments));
       localStorage.setItem(LS_COMBOS, String(this.session.totalSessionCombinations));
     } catch (e) {
-      // localStorage quota exceeded – non-critical; fail silently
+      // quota exceeded, silently fail
     }
   }
 
@@ -531,9 +529,6 @@ class App {
     if (!result) return;
     const recorded = this.session.recordTaskResult(result);
 
-    // Persist to localStorage after every completed task
-    this.saveLocalSession();
-
     // Instantaneous rate
     const elapsed = Math.max(elapsedMs || 100, 10) / 1000;
     const rate = Math.round(recorded.combinations / elapsed);
@@ -547,7 +542,7 @@ class App {
       this.el.statSessionCombos.textContent = fmt(this.session.totalSessionCombinations);
     }
     if (this.el.statBlocksMined) {
-      this.el.statBlocksMined.textContent = fmt(recorded.bankSize);
+      this.el.statBlocksMined.textContent = fmt(this.session.totalMinedBlocks);
     }
     if (this.el.statRate) {
       this.el.statRate.textContent = `${fmt(avgRate)} combos/s`;
@@ -562,32 +557,46 @@ class App {
     }
 
     // Update submit/bank UI
-    this._updateBankUI(result);
+    this._updateBankUI();
+
+    // Throttle disk writes to localStorage: at most once every 3.5 seconds
+    const now = Date.now();
+    if (!this._lastSaveTime || now - this._lastSaveTime >= 3500) {
+      this._lastSaveTime = now;
+      this.saveLocalSession();
+    }
 
     // Check if sample cadence reached
-    const now = Date.now();
     if (now - this.lastSampleTime >= this.GRAPH_INTERVAL_MS) {
       this.sampleGraphPoint();
     }
   }
 
-  _updateBankUI(result) {
-    const count = this.session.sessionBank.length;
+  _updateBankUI() {
+    const count = this.session.totalMinedBlocks;
     if (count > 0) {
       if (this.el.btnSubmit) {
         this.el.btnSubmit.disabled = false;
-        this.el.btnSubmit.textContent = `Bank Work (${count} block${count > 1 ? 's' : ''}) ↗`;
+        this.el.btnSubmit.textContent = `Bank Work (${count.toLocaleString()} block${count > 1 ? 's' : ''}) ↗`;
       }
       if (this.el.syncState) {
-        this.el.syncState.textContent = `${count} block${count > 1 ? 's' : ''} mined · ready to submit to GitHub`;
+        this.el.syncState.textContent = `${count.toLocaleString()} block${count > 1 ? 's' : ''} mined · ready to submit to GitHub`;
       }
 
       const repoOwner = localStorage.getItem('114-repo-owner') || REPO_OWNER;
       const repoName  = localStorage.getItem('114-repo-name') || REPO_NAME;
-      const ctx = result?.task?.context || this.session.sessionBank[0]?.task?.context || '';
-      const defaultTitle = `[REPORT] ${ctx} (${count} block${count > 1 ? 's' : ''})`;
+      const ctx = this.session.segments[0]?.context || this.session.activeContext || '';
+      const defaultTitle = `[REPORT] ${ctx} (${count.toLocaleString()} block${count > 1 ? 's' : ''})`;
       if (this.el.btnGithubIssue) {
         this.el.btnGithubIssue.href = `https://github.com/${repoOwner}/${repoName}/issues/new?template=report.yml&title=${encodeURIComponent(defaultTitle)}`;
+      }
+    } else {
+      if (this.el.btnSubmit) {
+        this.el.btnSubmit.disabled = true;
+        this.el.btnSubmit.textContent = 'Bank Work ↗';
+      }
+      if (this.el.syncState) {
+        this.el.syncState.textContent = '0 blocks mined · ready to mine';
       }
     }
   }
@@ -713,9 +722,9 @@ class App {
     const repoName = localStorage.getItem('114-repo-name') || REPO_NAME;
     const repoBase = `https://github.com/${repoOwner}/${repoName}`;
 
-    const reports = this.session.formatReportBlock(contributor, github);
+    const report = this.session.formatReport(contributor, github);
 
-    if (!reports) {
+    if (!report) {
       this.el.reportTitle.value = '[REPORT] Session Ready';
       this.el.reportBody.value = 'No mined blocks in current session yet. Click "Start Mining" to compute blocks.';
       this.el.reportCopyStatus.textContent = 'No blocks mined yet.';
@@ -724,64 +733,22 @@ class App {
       return;
     }
 
-    // formatReportBlock always returns an array now
-    const reportList = Array.isArray(reports) ? reports : [reports];
-    this._reportParts   = reportList;
-    this._reportPartIdx = 0;
-    const isMultiPart = reportList.length > 1;
+    this.el.reportTitle.value = report.title;
+    this.el.reportBody.value = report.body;
 
-    const showPart = (idx) => {
-      const p = reportList[idx];
-      this.el.reportTitle.value = p.title;
-      this.el.reportBody.value  = p.body;
-      const issueUrl = `${repoBase}/issues/new?template=report.yml&title=${encodeURIComponent(p.title)}`;
-      this.el.btnGithubIssue.href = issueUrl;
-      navigator.clipboard?.writeText?.(p.body).catch(() => {});
+    const issueUrl = `${repoBase}/issues/new?template=report.yml&title=${encodeURIComponent(report.title)}`;
+    this.el.btnGithubIssue.href = issueUrl;
 
-      const btnNext = document.getElementById('btn-next-part');
-      if (btnNext) {
-        btnNext.textContent = idx < reportList.length - 1
-          ? `Next Part → (${idx + 2}/${reportList.length})`
-          : `↩ Back to Part 1`;
-        btnNext.style.display = isMultiPart ? '' : 'none';
-      }
+    const nextBtn = document.getElementById('btn-next-part');
+    if (nextBtn) nextBtn.remove();
 
-      if (isMultiPart) {
-        this.el.reportCopyStatus.textContent =
-          `Part ${idx + 1} of ${reportList.length} — copied! Open a GitHub Issue and paste, ` +
-          `then click "Next Part" to get the next chunk.`;
-      } else {
-        this.el.reportCopyStatus.textContent =
-          'Copied to clipboard! Click "Open GitHub Issue ↗" and paste (Ctrl+V).';
-      }
-    };
-
-    // Ensure the "Next Part" button exists
-    if (!document.getElementById('btn-next-part')) {
-      const btn = document.createElement('button');
-      btn.id = 'btn-next-part';
-      btn.className = 'btn';
-      btn.style.marginLeft = '8px';
-      btn.addEventListener('click', () => {
-        this._reportPartIdx =
-          this._reportPartIdx < this._reportParts.length - 1
-            ? this._reportPartIdx + 1
-            : 0;
-        showPart(this._reportPartIdx);
-      });
-      this.el.btnCopyReport.parentNode.insertBefore(btn, this.el.btnCopyReport.nextSibling);
-    }
-
-    showPart(0);
-
-    if (!isMultiPart) {
+    navigator.clipboard?.writeText?.(report.body).then(() => {
       this.el.reportCopyStatus.textContent =
-        '1. Click "Copy Report" (or it auto-copies). 2. Click "Open GitHub Issue ↗" and paste (Ctrl+V).';
-    } else {
+        `Copied ${report.blocks.toLocaleString()} blocks to clipboard! Click "2. Open GitHub Issue ↗" and paste (Ctrl+V).`;
+    }).catch(() => {
       this.el.reportCopyStatus.textContent =
-        `⚠️ ${this.session.sessionBank.length} blocks split into ${reportList.length} parts — ` +
-        `submit each as a separate GitHub Issue using "Next Part →".`;
-    }
+        'Click "1. Copy Report", then click "2. Open GitHub Issue ↗" and paste (Ctrl+V).';
+    });
 
     this.el.modalReport.classList.remove('hidden');
   }

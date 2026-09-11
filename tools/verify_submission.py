@@ -27,21 +27,93 @@ def now_iso():
 
 
 def parse_report_body(body_text: str) -> dict:
-    """Parses single report or batch report block from markdown."""
+    """Parses single report, range report, or batch report from markdown."""
     if len(body_text.encode("utf-8")) > MAX_BODY_BYTES:
         raise ValueError("Issue body exceeds maximum size limit (64KB)")
 
-    # Check for JSON bank format first
-    json_match = re.search(r"```json\s*(\{.*?\})\s*```", body_text, re.DOTALL)
-    if json_match:
-        try:
-            data = json.loads(json_match.group(1))
-            if data.get("schema") in ("114-report-v1", "math-gambling-bank-v1") and "tasks" in data:
-                return data
-        except json.JSONDecodeError:
-            pass
+    # 1. Check for 114v2 compact format (ranges)
+    v2_match = re.search(r"<!--\s*114v2\s*-->(.*?)<!--\s*(?:end-114v2|/114v2)\s*-->", body_text, re.DOTALL | re.IGNORECASE)
+    if v2_match:
+        content = v2_match.group(1)
+        contributor = "Anonymous"
+        github = ""
+        solution = None
+        tasks = []
+        claimed_combos = 0
 
-    # Check for delimited key-value report
+        for line in content.strip().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            lower = line.lower()
+            if lower.startswith(("contributor:", "a=", "name:")):
+                contributor = line.split(":", 1)[-1].split("=", 1)[-1].strip()
+            elif lower.startswith(("github:", "g=", "user:")):
+                github = line.split(":", 1)[-1].split("=", 1)[-1].strip().lstrip("@")
+            elif lower.startswith(("solution:", "sol:", "hit:")):
+                solution = line.split(":", 1)[-1].strip()
+            elif lower.startswith(("combinations:", "combos:")):
+                try:
+                    claimed_combos = int(line.split(":", 1)[-1].strip().replace(",", ""))
+                except Exception:
+                    pass
+            else:
+                m = re.match(r"^(c\d{2}):(\d+):(\d+)(?::(\d+))?(?::([0-9a-fA-F]{64}))?", line)
+                if m:
+                    ctx, row_s, blk_s, count_s, digest = m.groups()
+                    if ctx not in core.CONTEXT_BY_ID:
+                        continue
+                    c = core.CONTEXT_BY_ID[ctx]
+                    row = int(row_s)
+                    blk = int(blk_s)
+                    count = int(count_s or 1)
+                    count = min(count, 50000)
+                    for i in range(count):
+                        t = core.make_task(ctx, str(row), blk)
+                        d = digest if (i == count - 1 or count == 1) else None
+                        tasks.append({"task": t, "digest": d, "solution": solution if i == count - 1 else None})
+                        blk += 1
+                        if blk >= c["blocks"]:
+                            blk = 0
+                            row = (row + core.ROWS_PER_TASK) % int(c["totalRows"])
+
+        if tasks:
+            return {
+                "schema": "114-report-v2",
+                "contributor": {"name": contributor, "github": github},
+                "tasks": tasks,
+                "claimed_combinations": claimed_combos,
+                "solution": solution,
+            }
+
+    # 2. Check for JSON bank format (including truncated JSON repair)
+    json_match = re.search(r"```json\s*(\{.*)", body_text, re.DOTALL)
+    if json_match:
+        candidate = json_match.group(1)
+        closing_match = re.search(r"```json\s*(\{.*?\})\s*```", body_text, re.DOTALL)
+        if closing_match:
+            candidate = closing_match.group(1)
+        data = None
+        try:
+            data = json.loads(candidate)
+        except json.JSONDecodeError:
+            # Attempt truncated JSON repair by finding last complete task object
+            pos = len(candidate)
+            while pos > 0:
+                last_brace = candidate.rfind("}", 0, pos)
+                if last_brace == -1:
+                    break
+                attempt = candidate[:last_brace + 1] + "\n]}"
+                try:
+                    data = json.loads(attempt)
+                    break
+                except Exception:
+                    pos = last_brace
+
+        if data and data.get("schema") in ("114-report-v1", "114-report-v2", "math-gambling-bank-v1") and "tasks" in data:
+            return data
+
+    # 3. Check for delimited key-value report (legacy 114-report-v1)
     kv_match = re.search(r"<!--\s*114-report-v1\s*-->(.*?)<!--\s*end-114-report\s*-->", body_text, re.DOTALL)
     if kv_match:
         lines = [line.strip() for line in kv_match.group(1).strip().splitlines() if line.strip()]
@@ -74,7 +146,7 @@ def parse_report_body(body_text: str) -> dict:
             }]
         }
 
-    # Direct fallback: parse raw JSON if the entire body is JSON
+    # 4. Direct fallback: parse raw JSON if the entire body is JSON
     try:
         data = json.loads(body_text.strip())
         if "tasks" in data:
@@ -82,7 +154,7 @@ def parse_report_body(body_text: str) -> dict:
     except Exception:
         pass
 
-    raise ValueError("Could not find a valid report block (<!-- 114-report-v1 --> or ```json) in issue body")
+    raise ValueError("Could not find a valid report block (<!-- 114v2 -->, <!-- 114-report-v1 -->, or ```json) in issue body")
 
 
 def verify_and_apply(report_data: dict, submitter_login: str) -> dict:
@@ -111,8 +183,9 @@ def verify_and_apply(report_data: dict, submitter_login: str) -> dict:
     tasks_to_verify = report_data.get("tasks", [])
     if not tasks_to_verify:
         raise ValueError("Report contains no tasks")
-    if len(tasks_to_verify) > 256:
-        raise ValueError("Report exceeds maximum task limit of 256")
+    MAX_TASKS_LIMIT = 50000
+    if len(tasks_to_verify) > MAX_TASKS_LIMIT:
+        raise ValueError(f"Report exceeds maximum task limit of {MAX_TASKS_LIMIT}")
 
     accepted_tasks = []
     duplicate_tasks = []

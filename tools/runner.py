@@ -208,32 +208,49 @@ Examples:
 
         current_row += core.ROWS_PER_TASK
 
-    # ── Format and save report ────────────────────────────────────────────────
-    report_envelope = {
-        "schema": "114-report-v1",
-        "contributor": {"name": args.name, "github": args.github},
-        "tasks": finished_reports,
-    }
+    # ── Format and save compact report ────────────────────────────────────────
+    first_task = finished_reports[0]["task"]
+    last_digest = finished_reports[-1]["digest"]
+    count = len(finished_reports)
 
-    out_file = Path.cwd() / f"report_{ctx_id}_{int(time.time())}.json"
-    out_file.write_text(json.dumps(report_envelope, indent=2), encoding="utf-8")
+    report_body = [
+        f"### Search Verification Report",
+        f"- Contributor: **{args.name}** (@{args.github or 'anonymous'})",
+        f"- Total Blocks Mined: `{count:,}`",
+        f"- Combinations Evaluated: `{total_combos:,}`",
+        f"",
+        f"<!-- 114v2 -->",
+        f"contributor: {args.name}",
+        f"github: {args.github}",
+        f"blocks: {count}",
+        f"combinations: {total_combos}",
+        f"ranges:",
+        f"{ctx_id}:{first_task['row']}:{first_task['block']}:{count}:{last_digest}",
+        f"<!-- end-114v2 -->",
+    ]
+    report_text = "\n".join(report_body)
+
+    out_file = Path.cwd() / f"report_{ctx_id}_{int(time.time())}.txt"
+    out_file.write_text(report_text, encoding="utf-8")
 
     elapsed_total = time.perf_counter() - batch_start
     rate = total_combos / elapsed_total if elapsed_total > 0 else 0
 
     print(f"\n{'─'*60}")
     print(f"  Batch complete!")
-    print(f"  Tasks completed : {len(finished_reports)}")
+    print(f"  Tasks completed : {count:,}")
     print(f"  Combinations    : {total_combos:,}")
     print(f"  Wall time       : {elapsed_total:.1f}s  ({rate:,.0f} combos/s)")
     print(f"  Report saved    : {out_file.name}")
+    print(f"{'─'*60}\n")
+    print(f"To submit, create a GitHub Issue at:")
+    print(f"  https://github.com/erensh27/sum-of-three-cubes-114/issues/new")
+    print(f"\nTitle:")
+    print(f"  [REPORT] {ctx_id} ({count} blocks)")
+    print(f"\nBody (copy the lines below):")
     print(f"{'─'*60}")
-    print()
-    print("To submit, open a GitHub Issue titled:")
-    print(f"  [REPORT] {ctx_id} ({len(finished_reports)} tasks)")
-    print()
-    print("And paste the full contents of the report JSON into the issue body.")
-    print(f"URL: https://github.com/erensh27/sum-of-three-cubes-114/issues/new")
+    print(report_text)
+    print(f"{'─'*60}")
 
 
 if __name__ == "__main__":
