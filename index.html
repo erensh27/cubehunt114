@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Project 114 — Distributed Search for x³ + y³ + z³ = 114</title>
   <meta name="description" content="Distributed, browser-based volunteer search for integer representations of 114 as the sum of three cubes using cubic-field norm sieves.">
-  <link rel="stylesheet" href="./styles.css">
-  <script type="module" src="./app.mjs"></script>
+  <link rel="stylesheet" href="./styles.css?v=3">
+  <script type="module" src="./app.mjs?v=3"></script>
 </head>
 <body>
 
@@ -161,9 +161,11 @@
           Target repository: <a href="https://github.com/erensh27/sum-of-three-cubes-114/issues" target="_blank" rel="noopener">github.com/erensh27/sum-of-three-cubes-114</a>
         </div>
       </div>
-      <div class="modal-actions">
+      <div class="modal-actions" style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
         <button id="btn-copy-report">1. Copy Report</button>
+        <button id="btn-download-report" class="btn">💾 Download .txt</button>
         <a id="btn-github-issue" class="btn primary" target="_blank" rel="noopener" href="https://github.com/erensh27/sum-of-three-cubes-114/issues/new?template=report.yml&title=%5BREPORT%5D">2. Open GitHub Issue ↗</a>
+        <button id="btn-clear-bank" class="btn quiet" style="margin-left: auto;">Reset Bank</button>
       </div>
     </div>
   </div>

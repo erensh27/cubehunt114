@@ -91,6 +91,8 @@ class App {
       reportBody: $('report-body'),
       reportCopyStatus: $('report-copy-status'),
       btnCopyReport: $('btn-copy-report'),
+      btnDownloadReport: $('btn-download-report'),
+      btnClearBank: $('btn-clear-bank'),
       btnGithubIssue: $('btn-github-issue'),
       btnCloseModal: $('btn-close-modal'),
     };
@@ -332,6 +334,34 @@ class App {
         navigator.clipboard?.writeText?.(text).catch(() => {});
       }
     });
+
+    if (this.el.btnDownloadReport) {
+      this.el.btnDownloadReport.addEventListener('click', () => {
+        const text = this.el.reportBody.value;
+        if (!text) return;
+        const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `project114_report_${Date.now()}.txt`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        this.el.reportCopyStatus.textContent = 'Report file downloaded! You can attach or copy from it.';
+      });
+    }
+
+    if (this.el.btnClearBank) {
+      this.el.btnClearBank.addEventListener('click', () => {
+        if (confirm('Reset and clear banked blocks for a fresh mining batch?')) {
+          this.session.clearBank();
+          this.saveLocalSession();
+          this._updateBankUI();
+          this.el.modalReport.classList.add('hidden');
+        }
+      });
+    }
   }
 
   // ── Mining control ─────────────────────────────────────────────────────────

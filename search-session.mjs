@@ -36,17 +36,34 @@ export class SearchSession {
         this.segments = val;
         this.totalMinedBlocks = val.reduce((s, seg) => s + (seg.count || 1), 0);
       } else if (val.length > 0 && val[0].task) {
-        // Migrate legacy flat task array to a segment
-        this.segments = [{
-          context: val[0].task.context,
-          startRow: String(val[0].task.row),
-          startBlock: val[0].task.block,
-          lastRow: String(val[val.length - 1].task.row),
-          lastBlock: val[val.length - 1].task.block,
-          count: val.length,
-          combinations: this.totalSessionCombinations || (val.length * 2048),
-          digest: val[val.length - 1].digest || '',
-        }];
+        // Migrate legacy flat task array: condense contiguous chunks into segments
+        const segs = [];
+        for (const item of val) {
+          const t = item.task;
+          const d = item.digest || '';
+          const combos = item.combinations || 2048;
+          const c = CONTEXTS.find(x => x.id === t.context) || CONTEXTS[0];
+          const last = segs[segs.length - 1];
+          if (last && last.context === t.context && this._isNextTask(c, last.lastRow, last.lastBlock, t.row, t.block)) {
+            last.count++;
+            last.combinations += combos;
+            last.lastRow = String(t.row);
+            last.lastBlock = t.block;
+            last.digest = d;
+          } else {
+            segs.push({
+              context: t.context,
+              startRow: String(t.row),
+              startBlock: t.block,
+              lastRow: String(t.row),
+              lastBlock: t.block,
+              count: 1,
+              combinations: combos,
+              digest: d,
+            });
+          }
+        }
+        this.segments = segs;
         this.totalMinedBlocks = val.length;
       } else {
         this.segments = [];
