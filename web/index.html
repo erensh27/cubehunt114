@@ -55,22 +55,17 @@
 
         <div class="btn-group">
           <button id="btn-toggle" class="primary">Start Mining</button>
-          <button id="btn-submit" disabled>Submit Report</button>
+          <button id="btn-submit" disabled>Bank Work ↗</button>
         </div>
       </div>
 
+      <div class="sync-status-row">
+        <span id="sync-state">0 blocks mined · ready to mine</span>
+        <span id="session-elapsed">0:00</span>
+      </div>
+
       <!-- Real-time Local Telemetry Grid -->
-      <div class="metrics-grid">
-        <div class="metric-card">
-          <div class="metric-label">Active Channel</div>
-          <div id="stat-context" class="metric-value">—</div>
-        </div>
-
-        <div class="metric-card">
-          <div class="metric-label">Lattice Row Frontier</div>
-          <div id="stat-row" class="metric-value">—</div>
-        </div>
-
+      <div class="metrics-grid" style="margin-top: 14px;">
         <div class="metric-card">
           <div class="metric-label">Blocks Mined</div>
           <div id="stat-blocks-mined" class="metric-value">0</div>
@@ -82,25 +77,25 @@
         </div>
 
         <div class="metric-card">
-          <div class="metric-label">Hash Rate</div>
-          <div id="stat-rate" class="metric-value">0 combos/s</div>
+          <div class="metric-label">Active Channel</div>
+          <div id="stat-context" class="metric-value">—</div>
         </div>
 
         <div class="metric-card">
-          <div class="metric-label">Best Residue (Δ)</div>
-          <div id="stat-best-delta" class="metric-value">—</div>
+          <div class="metric-label">Search Rate</div>
+          <div id="stat-rate" class="metric-value">0 combos/s</div>
         </div>
       </div>
     </section>
 
-    <!-- Real-time Telemetry & Pipeline Visualizer -->
+    <!-- Real-time Search Throughput Graph (from math-gambling pulse) -->
     <section class="panel viz-panel">
       <div class="panel-header">
-        <span>Real-Time Search Telemetry &amp; Sieve Filter Waterfall</span>
-        <span>Lattice Phase Space</span>
+        <span>The Run</span>
+        <span><strong id="stat-graph-rate">—</strong> combos / sec</span>
       </div>
-      <div class="canvas-container">
-        <canvas id="viz-canvas"></canvas>
+      <div id="run-pulse" class="run-pulse">
+        <p class="empty-state">No compute running. Start mining to plot throughput.</p>
       </div>
     </section>
 
@@ -119,12 +114,11 @@
               <th class="col-name">Contributor</th>
               <th class="col-blocks">Blocks Mined</th>
               <th class="col-combos">Combinations Tested</th>
-              <th class="col-delta">Best Residual (Δ)</th>
             </tr>
           </thead>
           <tbody id="leaderboard-body">
             <tr>
-              <td colspan="5" class="empty-state">Loading verified leaderboard...</td>
+              <td colspan="4" class="empty-state">Loading verified leaderboard...</td>
             </tr>
           </tbody>
         </table>
@@ -145,28 +139,31 @@
   <div id="modal-report" class="modal-overlay hidden">
     <div class="modal-content">
       <div class="modal-header">
-        <h3>SUBMIT VERIFIED SEARCH REPORT</h3>
-        <button id="btn-close-modal" class="btn-text">ESC / CLOSE</button>
+        <h3>Bank Mined Blocks</h3>
+        <button id="btn-close-modal" class="btn quiet">✕</button>
       </div>
       <div class="modal-body">
         <p style="color: var(--text-secondary); font-size: 11px;">
-          Submit your mined blocks to GitHub. When an issue titled with <code>[REPORT]</code> is opened, GitHub Actions automatically verifies your result digest via canonical replay, logs your contribution, and permanently credits your account on the leaderboard.
+          Banking submits your mined blocks to GitHub. When an issue titled with <code>[REPORT]</code> is opened, GitHub Actions independently replays your tasks to verify SHA-256 digests and credits your account on the leaderboard.
         </p>
         <div class="input-group">
-          <label>Issue Title</label>
-          <input type="text" id="report-title" readonly>
+          <label for="report-title">Issue Title</label>
+          <input type="text" id="report-title" readonly spellcheck="false">
         </div>
         <div class="input-group">
-          <label>Report Payload (Markdown &amp; JSON)</label>
-          <textarea id="report-body" readonly></textarea>
+          <label for="report-body">Report Payload (JSON &amp; Verification Block)</label>
+          <textarea id="report-body" readonly spellcheck="false"></textarea>
+        </div>
+        <div id="report-copy-status" class="copy-status">
+          1. Copy the report payload below. 2. Open GitHub Issue and paste (Ctrl+V) into the issue description.
         </div>
         <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">
-          Target repository: <a href="https://github.com/erensh27/sum-of-three-cubes-114" target="_blank" rel="noopener">github.com/erensh27/sum-of-three-cubes-114</a> (Auto-copied to clipboard on click)
+          Target repository: <a href="https://github.com/erensh27/sum-of-three-cubes-114/issues" target="_blank" rel="noopener">github.com/erensh27/sum-of-three-cubes-114</a>
         </div>
       </div>
       <div class="modal-actions">
-        <button id="btn-copy-report">Copy Report</button>
-        <a id="btn-github-issue" class="btn primary" target="_blank" rel="noopener">Open GitHub Issue (One-Click)</a>
+        <button id="btn-copy-report">1. Copy Report</button>
+        <a id="btn-github-issue" class="btn primary" target="_blank" rel="noopener" href="https://github.com/erensh27/sum-of-three-cubes-114/issues/new?template=report.yml&title=%5BREPORT%5D">2. Open GitHub Issue ↗</a>
       </div>
     </div>
   </div>

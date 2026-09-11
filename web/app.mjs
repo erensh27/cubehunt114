@@ -11,44 +11,47 @@ const REPO_NAME = 'sum-of-three-cubes-114';
 const $ = id => document.getElementById(id);
 const fmt = n => (n != null ? Number(n).toLocaleString('en-US') : '—');
 
+const NS = 'http://www.w3.org/2000/svg';
+const compactFmt = new Intl.NumberFormat('en-US', {
+  notation: 'compact',
+  maximumFractionDigits: 2,
+});
+const fmtCompact = v => compactFmt.format(v || 0);
+
+function node(tag, attrs = {}, value) {
+  const e = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (value != null) e.textContent = value;
+  return e;
+}
+
 class App {
   constructor() {
     this.session = new SearchSession('./');
     this.worker = null;
     this.isRunning = false;
-    this.dutyThrottle = 0; // 0ms throttle by default
+    this.dutyThrottle = 0;
     this.recentRates = [];
-    this.lastTaskTime = performance.now();
     this.globalBaseCombinations = 0;
     this.globalBaseTasks = 0;
 
-    // Visual telemetry buffer
-    this.vizHistory = [];
-    this.lastTaskStatus = 'STANDBY';
-    this.lastGraphSampleTime = performance.now();
-    this.intervalCombos = 0;
-    this.GRAPH_INTERVAL_MS = 4500; // Sample graph every 4.5 seconds
-    this.currentIssueUrl = '';
-    this.activeFilterCounters = {
-      generators: 0,
-      quotient_points: 0,
-      rejected_mod243: 0,
-      rejected_parity: 0,
-      rejected_prime: 0,
-      exact_tests: 0,
-    };
-    this.sessionFilterCounters = {
-      rejected_mod243: 0,
-      rejected_parity: 0,
-      rejected_prime: 0,
-      exact_tests: 0,
-    };
+    // Measured rate telemetry (Math-Gambling pulse graph)
+    this.graphPoints = [];
+    this.startedTime = 0;
+    this.lastSampleTime = 0;
+    this.lastSampleCombos = 0;
+    this.graphTimer = null;
+    this.elapsedTimer = null;
+    this.sessionStartTimestamp = null;
+    this.GRAPH_INTERVAL_MS = 4500; // 4.5 second cadence
 
     this.initElements();
     this.initWorker();
-    this.initCanvas();
+    this.loadSavedIdentity();
     this.loadState();
     this.bindEvents();
+
+    window.addEventListener('resize', () => this.renderPulseGraph());
   }
 
   initElements() {
@@ -57,31 +60,42 @@ class App {
       statusText: $('status-text'),
       btnToggle: $('btn-toggle'),
       btnSubmit: $('btn-submit'),
+      syncState: $('sync-state'),
+      sessionElapsed: $('session-elapsed'),
       inputName: $('input-name'),
       inputGithub: $('input-github'),
       dutySelect: $('duty-select'),
       statContext: $('stat-context'),
-      statRow: $('stat-row'),
+      statBlocksMined: $('stat-blocks-mined'),
       statSessionCombos: $('stat-session-combos'),
       statRate: $('stat-rate'),
-      statBlocksMined: $('stat-blocks-mined'),
-      statBestDelta: $('stat-best-delta'),
+      statGraphRate: $('stat-graph-rate'),
+      runPulse: $('run-pulse'),
       globalCounter: $('global-total-counter'),
       leaderboardBody: $('leaderboard-body'),
       modalReport: $('modal-report'),
       reportTitle: $('report-title'),
       reportBody: $('report-body'),
-      btnGithubIssue: $('btn-github-issue'),
+      reportCopyStatus: $('report-copy-status'),
       btnCopyReport: $('btn-copy-report'),
+      btnGithubIssue: $('btn-github-issue'),
       btnCloseModal: $('btn-close-modal'),
-      canvas: $('viz-canvas'),
     };
+  }
 
-    // Load saved contributor handle
-    const savedName = localStorage.getItem('114-name');
+  loadSavedIdentity() {
+    const savedName = localStorage.getItem('114-contributor') || localStorage.getItem('114-name');
     const savedGh = localStorage.getItem('114-github');
-    if (savedName) this.el.inputName.value = savedName;
-    if (savedGh) this.el.inputGithub.value = savedGh;
+    if (savedName && this.el.inputName) this.el.inputName.value = savedName;
+    if (savedGh && this.el.inputGithub) this.el.inputGithub.value = savedGh;
+  }
+
+  saveIdentity() {
+    const name = this.el.inputName ? this.el.inputName.value.trim() : '';
+    const gh = this.el.inputGithub ? this.el.inputGithub.value.trim().replace(/^@/, '') : '';
+    localStorage.setItem('114-contributor', name);
+    localStorage.setItem('114-name', name);
+    localStorage.setItem('114-github', gh);
   }
 
   initWorker() {
@@ -143,11 +157,12 @@ class App {
 
   renderLeaderboard(contributors) {
     const tbody = this.el.leaderboardBody;
+    if (!tbody) return;
     tbody.innerHTML = '';
 
     if (!contributors || contributors.length === 0) {
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td colspan="5" class="empty-state">No verified blocks recorded yet. Be the first to mine.</td>`;
+      tr.innerHTML = `<td colspan="4" class="empty-state">No verified blocks recorded yet. Be the first to mine.</td>`;
       tbody.appendChild(tr);
       return;
     }
@@ -162,13 +177,13 @@ class App {
         <td class="col-name"><strong>${this.escape(c.name || 'Anonymous')}</strong> <span class="gh-tag">${ghLink}</span></td>
         <td class="col-blocks">${fmt(c.verified_tasks || 0)}</td>
         <td class="col-combos">${fmt(c.combinations || 0)}</td>
-        <td class="col-delta">${c.best_delta != null ? fmt(c.best_delta) : '—'}</td>
       `;
       tbody.appendChild(tr);
     });
   }
 
   updateGlobalCounter() {
+    if (!this.el.globalCounter) return;
     const total = this.globalBaseCombinations + this.session.totalSessionCombinations;
     this.el.globalCounter.textContent = total.toLocaleString('en-US');
   }
@@ -193,14 +208,11 @@ class App {
       }
     });
 
-    const saveIdentity = () => {
-      localStorage.setItem('114-name', this.el.inputName.value.trim());
-      localStorage.setItem('114-github', this.el.inputGithub.value.trim());
-    };
-    this.el.inputName.addEventListener('input', saveIdentity);
-    this.el.inputGithub.addEventListener('input', saveIdentity);
-    this.el.inputName.addEventListener('change', saveIdentity);
-    this.el.inputGithub.addEventListener('change', saveIdentity);
+    const onIdentityInput = () => this.saveIdentity();
+    this.el.inputName.addEventListener('input', onIdentityInput);
+    this.el.inputGithub.addEventListener('input', onIdentityInput);
+    this.el.inputName.addEventListener('change', onIdentityInput);
+    this.el.inputGithub.addEventListener('change', onIdentityInput);
 
     this.el.btnSubmit.addEventListener('click', () => {
       this.openSubmitModal();
@@ -210,33 +222,59 @@ class App {
       this.el.modalReport.classList.add('hidden');
     });
 
-    this.el.btnCopyReport.addEventListener('click', () => {
+    this.el.btnCopyReport.addEventListener('click', async () => {
       const text = this.el.reportBody.value;
-      navigator.clipboard.writeText(text).then(() => {
-        const orig = this.el.btnCopyReport.textContent;
-        this.el.btnCopyReport.textContent = 'COPIED TO CLIPBOARD';
+      try {
+        await navigator.clipboard.writeText(text);
+        this.el.reportCopyStatus.textContent = 'Copied to clipboard! Now click "2. Open GitHub Issue ↗" and paste (Ctrl+V) into the issue description.';
+        this.el.btnCopyReport.textContent = 'Copied!';
         setTimeout(() => {
-          this.el.btnCopyReport.textContent = orig;
+          this.el.btnCopyReport.textContent = '1. Copy Report';
         }, 2000);
-      });
+      } catch {
+        this.el.reportBody.focus();
+        this.el.reportBody.select();
+        this.el.reportCopyStatus.textContent = 'Report selected! Press Ctrl+C (or Cmd+C) to copy, then click "Open GitHub Issue ↗".';
+      }
     });
 
-    this.el.btnGithubIssue.addEventListener('click', e => {
-      // Auto-copy full report JSON to clipboard before navigating
-      navigator.clipboard.writeText(this.el.reportBody.value).catch(() => {});
-      if (this.currentIssueUrl) {
-        window.open(this.currentIssueUrl, '_blank', 'noopener,noreferrer');
-        e.preventDefault();
+    // Native link navigation for GitHub issues (avoids browser popup blockers)
+    this.el.btnGithubIssue.addEventListener('pointerdown', () => {
+      const text = this.el.reportBody.value;
+      if (text) {
+        navigator.clipboard?.writeText?.(text).catch(() => {});
       }
     });
   }
 
   start() {
     this.isRunning = true;
+    this.saveIdentity();
     this.el.statusIndicator.className = 'indicator running';
     this.el.statusText.textContent = 'MINING ACTIVE';
     this.el.btnToggle.textContent = 'PAUSE COMPUTE';
     this.el.btnToggle.classList.add('active');
+
+    const now = Date.now();
+    if (!this.sessionStartTimestamp) {
+      this.sessionStartTimestamp = now;
+    }
+    this.startedTime = now;
+    this.lastSampleTime = now;
+    this.lastSampleCombos = this.session.totalSessionCombinations;
+
+    if (this.graphPoints.length === 0) {
+      this.graphPoints.push({ at: now, rate: 0 });
+    }
+
+    this.renderPulseGraph();
+
+    // Start cadence timers
+    clearInterval(this.graphTimer);
+    this.graphTimer = setInterval(() => this.sampleGraphPoint(), this.GRAPH_INTERVAL_MS);
+
+    clearInterval(this.elapsedTimer);
+    this.elapsedTimer = setInterval(() => this.updateElapsed(), 1000);
 
     this.worker.postMessage({ cmd: 'start', throttleMs: this.dutyThrottle });
     this.dispatchNextTask();
@@ -246,19 +284,34 @@ class App {
     this.isRunning = false;
     this.el.statusIndicator.className = 'indicator idle';
     this.el.statusText.textContent = 'MINING PAUSED';
-    this.el.btnToggle.textContent = 'START MINING';
+    this.el.btnToggle.textContent = 'RESUME MINING';
     this.el.btnToggle.classList.remove('active');
-    this.el.statRate.textContent = '0 combos/s';
+
+    clearInterval(this.graphTimer);
+    this.graphTimer = null;
+
+    clearInterval(this.elapsedTimer);
+    this.elapsedTimer = null;
+
+    this.sampleGraphPoint(true);
+    if (this.el.statGraphRate) this.el.statGraphRate.textContent = 'Paused';
+    if (this.el.statRate) this.el.statRate.textContent = '0 combos/s';
 
     this.worker.postMessage({ cmd: 'stop' });
+  }
+
+  updateElapsed() {
+    if (!this.sessionStartTimestamp || !this.el.sessionElapsed) return;
+    const sec = Math.floor((Date.now() - this.sessionStartTimestamp) / 1000);
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    this.el.sessionElapsed.textContent = `${m}:${s.toString().padStart(2, '0')}`;
   }
 
   dispatchNextTask() {
     if (!this.isRunning) return;
     const task = this.session.getNextTask();
-    this.el.statContext.textContent = task.context;
-    this.el.statRow.textContent = fmt(task.row);
-    this.lastTaskTime = performance.now();
+    if (this.el.statContext) this.el.statContext.textContent = task.context;
     this.worker.postMessage({ cmd: 'run_task', task });
   }
 
@@ -267,7 +320,7 @@ class App {
       const result = data.result;
       const recorded = this.session.recordTaskResult(result);
 
-      // Update rate calculation
+      // Instantaneous rate
       const elapsed = (data.elapsedMs || 100) / 1000;
       const rate = Math.round(recorded.combinations / elapsed);
       this.recentRates.push(rate);
@@ -276,45 +329,37 @@ class App {
         this.recentRates.reduce((a, b) => a + b, 0) / this.recentRates.length
       );
 
-      this.el.statSessionCombos.textContent = fmt(this.session.totalSessionCombinations);
-      this.el.statBlocksMined.textContent = fmt(recorded.bankSize);
-      this.el.statRate.textContent = `${fmt(avgRate)} combos/s`;
-
-      if (this.session.bestSessionCandidate) {
-        this.el.statBestDelta.textContent = `0 (SOLUTION FOUND)`;
-        this.el.statBestDelta.style.color = '#10b981';
+      if (this.el.statSessionCombos) {
+        this.el.statSessionCombos.textContent = fmt(this.session.totalSessionCombinations);
+      }
+      if (this.el.statBlocksMined) {
+        this.el.statBlocksMined.textContent = fmt(recorded.bankSize);
+      }
+      if (this.el.statRate) {
+        this.el.statRate.textContent = `${fmt(avgRate)} combos/s`;
       }
 
       this.updateGlobalCounter();
 
-      // Enable submit button once at least 1 block is mined
-      if (recorded.bankSize > 0) {
+      // Update submit/bank UI once at least 1 block is mined
+      const count = recorded.bankSize;
+      if (count > 0) {
         this.el.btnSubmit.disabled = false;
+        this.el.btnSubmit.textContent = `Bank Work (${count} block${count > 1 ? 's' : ''}) ↗`;
+        if (this.el.syncState) {
+          this.el.syncState.textContent = `${count} block${count > 1 ? 's' : ''} mined · ready to submit to GitHub`;
+        }
+
+        const repoOwner = localStorage.getItem('114-repo-owner') || REPO_OWNER;
+        const repoName = localStorage.getItem('114-repo-name') || REPO_NAME;
+        const defaultTitle = `[REPORT] ${result.task.context} (${count} block${count > 1 ? 's' : ''})`;
+        this.el.btnGithubIssue.href = `https://github.com/${repoOwner}/${repoName}/issues/new?template=report.yml&title=${encodeURIComponent(defaultTitle)}`;
       }
 
-      // Update visual telemetry buffer
-      this.activeFilterCounters = { ...result.counters };
-      for (const k of ['rejected_mod243', 'rejected_parity', 'rejected_prime', 'exact_tests']) {
-        this.sessionFilterCounters[k] += result.counters[k] || 0;
-      }
-      if (result.counters.curves > 0) {
-        this.lastTaskStatus = `ACTIVE CURVE (${result.counters.quotient_points.toLocaleString()} PTS)`;
-      } else {
-        this.lastTaskStatus = `SHELL EXCLUSION (${result.counters.generators.toLocaleString()} GEN)`;
-      }
-      // Accumulate combinations for the 4.5s interval sampling
-      this.intervalCombos += recorded.combinations;
-      const now = performance.now();
-      if (now - this.lastGraphSampleTime >= this.GRAPH_INTERVAL_MS) {
-        const elapsedSec = (now - this.lastGraphSampleTime) / 1000;
-        const intervalRate = Math.round(this.intervalCombos / elapsedSec);
-        this.vizHistory.push({
-          time: now,
-          rate: intervalRate,
-        });
-        if (this.vizHistory.length > 35) this.vizHistory.shift();
-        this.lastGraphSampleTime = now;
-        this.intervalCombos = 0;
+      // Check if sample cadence reached
+      const now = Date.now();
+      if (now - this.lastSampleTime >= this.GRAPH_INTERVAL_MS) {
+        this.sampleGraphPoint();
       }
     } else if (data.type === 'request_next_task') {
       this.dispatchNextTask();
@@ -326,165 +371,150 @@ class App {
     }
   }
 
+  sampleGraphPoint(force = false) {
+    const now = Date.now();
+    const dt = (now - this.lastSampleTime) / 1000;
+    if (!force && dt < 3.5) return;
+
+    const currentCombos = this.session.totalSessionCombinations;
+    const combosDelta = currentCombos - this.lastSampleCombos;
+    const rate = dt > 0 ? combosDelta / dt : 0;
+
+    this.graphPoints.push({ at: now, rate: Math.max(0, rate) });
+    if (this.graphPoints.length > 80) this.graphPoints.shift();
+
+    this.lastSampleTime = now;
+    this.lastSampleCombos = currentCombos;
+
+    if (this.el.statGraphRate) {
+      this.el.statGraphRate.textContent = this.isRunning ? fmtCompact(Math.round(rate)) : 'Paused';
+    }
+
+    this.renderPulseGraph();
+  }
+
+  // ── Math-Gambling Pulse SVG Throughput Graph ──────────────────────────────
+  renderPulseGraph() {
+    const el = this.el.runPulse;
+    if (!el) return;
+
+    if (this.graphPoints.length < 2) {
+      el.innerHTML = '<p class="empty-state">No compute running. Start mining to plot throughput.</p>';
+      return;
+    }
+
+    const W = Math.max(280, Math.min(1060, el.clientWidth || 800));
+    const H = 190;
+    const pl = 55;
+    const pb = 27;
+    const max = Math.max(...this.graphPoints.map(p => p.rate), 1);
+    const first = this.graphPoints[0].at;
+    const last = this.graphPoints[this.graphPoints.length - 1].at;
+
+    const X = x => pl + ((x - first) / Math.max(1, last - first)) * (W - pl - 12);
+    const Y = y => 10 + (1 - y / max) * (H - pb - 10);
+
+    const svg = node('svg', {
+      viewBox: `0 0 ${W} ${H}`,
+      role: 'img',
+      'aria-label': 'Measured combinations per wall-clock second across completed batches. Zero-based vertical axis.',
+    });
+
+    // 4 Horizontal Grid Lines & Y-axis labels
+    for (let i = 0; i < 4; i++) {
+      const y = (max * i) / 3;
+      svg.append(
+        node('line', {
+          x1: pl,
+          y1: Y(y),
+          x2: W - 12,
+          y2: Y(y),
+          class: 'chart-grid',
+        })
+      );
+      svg.append(
+        node(
+          'text',
+          {
+            x: pl - 8,
+            y: Y(y) + 4,
+            'text-anchor': 'end',
+            class: 'chart-label',
+          },
+          fmtCompact(y)
+        )
+      );
+    }
+
+    // Curve Line & Shaded Area
+    const path = this.graphPoints
+      .map((p, i) => `${i ? 'L' : 'M'}${X(p.at).toFixed(1)},${Y(p.rate).toFixed(1)}`)
+      .join(' ');
+
+    svg.append(
+      node('path', {
+        d: path + ` L${X(last)},${H - pb} L${X(first)},${H - pb} Z`,
+        class: 'pulse-area',
+      })
+    );
+    svg.append(node('path', { d: path, class: 'pulse-line' }));
+
+    // X-axis Time stamps
+    const elapsedStart = this.sessionStartTimestamp ? (first - this.sessionStartTimestamp) / 1000 : 0;
+    const elapsedEnd = this.sessionStartTimestamp ? (last - this.sessionStartTimestamp) / 1000 : 0;
+
+    svg.append(
+      node(
+        'text',
+        { x: X(first), y: H - 6, 'text-anchor': 'start', class: 'chart-label' },
+        `${Math.max(0, elapsedStart).toFixed(1)}s`
+      )
+    );
+    svg.append(
+      node(
+        'text',
+        { x: X(last), y: H - 6, 'text-anchor': 'end', class: 'chart-label' },
+        `${Math.max(0, elapsedEnd).toFixed(1)}s`
+      )
+    );
+
+    el.replaceChildren(svg);
+  }
+
   openSubmitModal() {
+    this.saveIdentity();
+
     const contributor = this.el.inputName.value.trim() || 'Anonymous';
-    const github = this.el.inputGithub.value.trim();
+    const github = this.el.inputGithub.value.trim().replace(/^@/, '');
+    const repoOwner = localStorage.getItem('114-repo-owner') || REPO_OWNER;
+    const repoName = localStorage.getItem('114-repo-name') || REPO_NAME;
+    const repoBase = `https://github.com/${repoOwner}/${repoName}`;
 
     const report = this.session.formatReportBlock(contributor, github);
+
     if (!report) {
-      alert('No mined blocks in session yet. Start compute to mine blocks first.');
+      this.el.reportTitle.value = '[REPORT] Session Ready';
+      this.el.reportBody.value = 'No mined blocks in current session yet. Click "Start Mining" to compute blocks, or visit GitHub Issues to view community submissions.';
+      this.el.reportCopyStatus.textContent = 'No blocks mined yet. Start compute to generate verifiable blocks.';
+      this.el.btnGithubIssue.href = `${repoBase}/issues`;
+      this.el.modalReport.classList.remove('hidden');
       return;
     }
 
     this.el.reportTitle.value = report.title;
     this.el.reportBody.value = report.body;
+    this.el.reportCopyStatus.textContent = '1. Click "Copy Report" (or it auto-copies). 2. Click "Open GitHub Issue ↗" and paste (Ctrl+V) into the issue description.';
 
-    const repoOwner = localStorage.getItem('114-repo-owner') || REPO_OWNER;
-    const repoName = localStorage.getItem('114-repo-name') || REPO_NAME;
+    // Construct issue URL with template and title (payload is copied via clipboard to avoid HTTP 414 length limits)
+    const issueUrl = `${repoBase}/issues/new?template=report.yml&title=${encodeURIComponent(report.title)}`;
+    this.el.btnGithubIssue.href = issueUrl;
 
-    // Use compactBody for URL so it never exceeds browser query limits (HTTP 414)
-    const url = new URL(`https://github.com/${repoOwner}/${repoName}/issues/new`);
-    url.searchParams.set('title', report.title);
-    url.searchParams.set('body', report.compactBody);
-    url.searchParams.set('labels', 'report');
+    // Auto-copy report to clipboard immediately upon opening modal
+    navigator.clipboard?.writeText?.(report.body).then(() => {
+      this.el.reportCopyStatus.textContent = 'Copied to clipboard! Now click "2. Open GitHub Issue ↗" and paste (Ctrl+V) into the issue description.';
+    }).catch(() => {});
 
-    this.currentIssueUrl = url.toString();
-    this.el.btnGithubIssue.href = this.currentIssueUrl;
     this.el.modalReport.classList.remove('hidden');
-  }
-
-  // ── High-Performance Telemetry Canvas ────────────────────────────────────
-  initCanvas() {
-    const canvas = this.el.canvas;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-
-    const resize = () => {
-      const rect = canvas.getBoundingClientRect();
-      const dpr = window.devicePixelRatio || 1;
-      canvas.width = rect.width * dpr;
-      canvas.height = rect.height * dpr;
-      ctx.scale(dpr, dpr);
-    };
-
-    window.addEventListener('resize', resize);
-    resize();
-
-    // Render loop
-    const draw = () => {
-      this.renderCanvasFrame(ctx, canvas.getBoundingClientRect());
-      requestAnimationFrame(draw);
-    };
-    requestAnimationFrame(draw);
-  }
-
-  renderCanvasFrame(ctx, rect) {
-    const w = rect.width;
-    const h = rect.height;
-    ctx.clearRect(0, 0, w, h);
-
-    // Background grid lines
-    ctx.strokeStyle = '#12161f';
-    ctx.lineWidth = 1;
-    for (let x = 0; x < w; x += 40) {
-      ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, h);
-      ctx.stroke();
-    }
-    for (let y = 0; y < h; y += 30) {
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(w, y);
-      ctx.stroke();
-    }
-
-    // Top: Sieve Filter Waterfall Breakdown (Session Cumulative)
-    const topH = h * 0.45;
-    const padding = 20;
-    const barWidth = (w - padding * 2) / 4 - 10;
-    const filters = [
-      { label: 'MOD-243 SIEVE', val: this.sessionFilterCounters.rejected_mod243, color: '#38bdf8' },
-      { label: 'PARITY FILTER', val: this.sessionFilterCounters.rejected_parity, color: '#818cf8' },
-      { label: 'PRIME QR SIEVE', val: this.sessionFilterCounters.rejected_prime, color: '#f59e0b' },
-      { label: 'EXACT SQRT', val: this.sessionFilterCounters.exact_tests, color: '#10b981' },
-    ];
-
-    const maxVal = Math.max(1, ...filters.map(f => f.val));
-
-    // Status banner at top right of canvas
-    ctx.fillStyle = '#64748b';
-    ctx.font = '10px monospace';
-    ctx.textAlign = 'right';
-    ctx.fillText(`STATUS: ${this.lastTaskStatus}`, w - padding, 18);
-
-    filters.forEach((f, i) => {
-      const bx = padding + i * (barWidth + 10);
-      const barH = (f.val / maxVal) * (topH - 52);
-      const by = topH - barH - 8;
-
-      // Label
-      ctx.fillStyle = '#64748b';
-      ctx.font = '10px monospace';
-      ctx.textAlign = 'left';
-      ctx.fillText(f.label, bx, 18);
-
-      // Value
-      ctx.fillStyle = '#cbd5e1';
-      ctx.font = 'bold 12px monospace';
-      ctx.fillText(fmt(f.val), bx, 32);
-
-      // Bar
-      ctx.fillStyle = f.color;
-      ctx.fillRect(bx, by, barWidth, Math.max(2, barH));
-    });
-
-    // Divider Line
-    ctx.strokeStyle = '#1e293b';
-    ctx.beginPath();
-    ctx.moveTo(0, topH);
-    ctx.lineTo(w, topH);
-    ctx.stroke();
-
-    // Bottom: Throughput Waveform (combos / sec)
-    const waveH = h - topH;
-    ctx.fillStyle = '#64748b';
-    ctx.font = '10px monospace';
-    ctx.fillText('LIVE THROUGHPUT (COMBINATIONS / SEC)', padding, topH + 20);
-
-    const history = this.vizHistory;
-    if (history.length > 1) {
-      const maxRate = Math.max(1000, ...history.map(p => p.rate));
-      const stepX = (w - padding * 2) / Math.max(history.length - 1, 10);
-
-      ctx.beginPath();
-      history.forEach((p, idx) => {
-        const px = padding + idx * stepX;
-        const normalized = p.rate / maxRate;
-        const py = h - 20 - normalized * (waveH - 50);
-        if (idx === 0) ctx.moveTo(px, py);
-        else ctx.lineTo(px, py);
-      });
-
-      ctx.strokeStyle = '#10b981';
-      ctx.lineWidth = 2;
-      ctx.stroke();
-
-      // Glowing dot at cursor
-      const last = history[history.length - 1];
-      const lastX = padding + (history.length - 1) * stepX;
-      const lastY = h - 20 - (last.rate / maxRate) * (waveH - 50);
-
-      ctx.beginPath();
-      ctx.arc(lastX, lastY, 4, 0, Math.PI * 2);
-      ctx.fillStyle = '#34d399';
-      ctx.fill();
-    } else {
-      ctx.fillStyle = '#334155';
-      ctx.font = '11px monospace';
-      ctx.textAlign = 'center';
-      ctx.fillText(this.isRunning ? 'CALIBRATING SIGNAL...' : 'ENGINE STANDBY', w / 2, topH + waveH / 2);
-    }
   }
 
   escape(str) {
