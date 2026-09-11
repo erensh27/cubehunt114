@@ -43,19 +43,38 @@ This project utilizes the **Booker–Sutherland cubic-field norm sieve**:
 
 ### 1. In Your Browser (Easiest)
 Visit the deployed web application on Vercel:
-1. Enter your preferred contributor name and GitHub username.
-2. Select your desired compute intensity (25%, 50%, or 100%).
-3. Click **Start Mining**. The Web Worker will execute tasks in the background while the real-time telemetry canvas visualizes filter cascades and combination throughput.
-4. When ready, click **Submit Report** to open a pre-filled GitHub Issue with your verified result blocks and SHA-256 digests.
+1. Enter your contributor name and GitHub username.
+2. Select compute intensity (100% is recommended if your machine can handle it).
+3. Click **Start Mining**. The Web Worker runs entirely in the background — you can keep using other tabs.
+4. When you've mined some blocks, click **Bank Work ↗** to open a pre-filled GitHub Issue. Copy the report and paste it into the issue body. GitHub Actions will automatically verify and credit you.
+
+> **Your progress is saved in your browser.** If you close the tab and come back, your mined blocks and already-completed task list are restored from `localStorage` — you won't re-mine work you've already done.
 
 ### 2. Local Python Runner (High Throughput)
-For dedicated multi-core compute:
+For maximum throughput on a dedicated machine or server:
 ```bash
 git clone https://github.com/erensh27/sum-of-three-cubes-114.git
 cd sum-of-three-cubes-114
-python3 tools/runner.py --name "YourName" --github "YourGitHubHandle" --tasks 16
+
+# Run a 32-task batch (auto-picks the least-explored context):
+python3 tools/runner.py --name "YourName" --github "yourhandle" --tasks 32
 ```
-The runner will systematically mine uncompleted lattice rows and generate a formatted report file ready to paste into a GitHub Issue.
+The runner automatically fetches the live verified-task ledger from GitHub so it never duplicates work already claimed by another contributor.
+
+### Running With Friends Simultaneously
+
+Each person should **pin a different context** using `--context` to guarantee zero overlap:
+
+| Friend | Command |
+|--------|---------|
+| You    | `python3 tools/runner.py --name "Alice" --github "alice" --context c00 --tasks 64` |
+| Friend 1 | `python3 tools/runner.py --name "Bob" --github "bob" --context c09 --tasks 64` |
+| Friend 2 | `python3 tools/runner.py --name "Carol" --github "carol" --context c18 --tasks 64` |
+| Friend 3 | `python3 tools/runner.py --name "Dave" --github "dave" --context c27 --tasks 64` |
+
+There are **81 contexts** (`c00`–`c80`) so you can have up to 81 people working with guaranteed no overlap. If you don't pin a context, the runner applies a random session salt to stagger your starting row automatically.
+
+After each batch, submit a GitHub Issue titled `[REPORT] <context> (<N> tasks)` with the contents of the generated `report_*.json` file. GitHub Actions will replay your tasks, verify the SHA-256 digests, credit you on the leaderboard, and commit the verified blocks to the shared ledger.
 
 ---
 
