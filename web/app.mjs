@@ -26,11 +26,16 @@ function node(tag, attrs = {}, value) {
   return e;
 }
 
+// localStorage keys for session persistence
+const LS_COMPLETED = '114-completed-tasks';
+const LS_BANK      = '114-session-bank';
+const LS_COMBOS    = '114-session-combos';
+
 class App {
   constructor() {
     this.session = new SearchSession('./');
     this.worker = null;
-    this.workerAvailable = false;
+    this.workerAvailable = false;   // true only after worker sends 'worker_ready'
     this.directTimer = null;
     this.isRunning = false;
     this.dutyThrottle = 0;
@@ -48,11 +53,16 @@ class App {
     this.sessionStartTimestamp = null;
     this.GRAPH_INTERVAL_MS = 4500; // 4.5 second cadence
 
+    // Gate mining until remote state is loaded (so we don't re-mine done tasks)
+    this._stateLoaded = false;
+    this._pendingStart = false;
+
     this.initElements();
     this.loadSavedIdentity();
     this.bindEvents();
     this.initWorker();
-    this.loadState();
+    this.restoreLocalSession();  // load localStorage data first
+    this.loadState();            // async – resolves _stateLoaded flag
 
     window.addEventListener('resize', () => this.renderPulseGraph());
   }
@@ -101,6 +111,54 @@ class App {
     localStorage.setItem('114-github', gh);
   }
 
+  // ── Local session persistence (avoid re-mining on reload) ─────────────────
+
+  restoreLocalSession() {
+    try {
+      const savedCompleted = localStorage.getItem(LS_COMPLETED);
+      if (savedCompleted) {
+        const ids = JSON.parse(savedCompleted);
+        if (Array.isArray(ids)) {
+          ids.forEach(id => this.session.completedTasks.add(id));
+        }
+      }
+      const savedBank   = localStorage.getItem(LS_BANK);
+      const savedCombos = localStorage.getItem(LS_COMBOS);
+      if (savedBank) {
+        const bank = JSON.parse(savedBank);
+        if (Array.isArray(bank) && bank.length > 0) {
+          this.session.sessionBank = bank;
+          this.session.totalSessionCombinations = Number(savedCombos) || 0;
+          this._updateBankUI();
+          // Also update combo counter in UI
+          if (this.el.statSessionCombos) {
+            this.el.statSessionCombos.textContent = fmt(this.session.totalSessionCombinations);
+          }
+          if (this.el.statBlocksMined) {
+            this.el.statBlocksMined.textContent = fmt(bank.length);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Could not restore local session:', e);
+    }
+  }
+
+  saveLocalSession() {
+    try {
+      const ids = [...this.session.completedTasks];
+      // Trim to avoid localStorage quota; keep the most recent 5000 task IDs
+      const trimmed = ids.length > 5000 ? ids.slice(ids.length - 5000) : ids;
+      localStorage.setItem(LS_COMPLETED, JSON.stringify(trimmed));
+      localStorage.setItem(LS_BANK, JSON.stringify(this.session.sessionBank));
+      localStorage.setItem(LS_COMBOS, String(this.session.totalSessionCombinations));
+    } catch (e) {
+      // localStorage quota exceeded – non-critical; fail silently
+    }
+  }
+
+  // ── Worker lifecycle ───────────────────────────────────────────────────────
+
   initWorker() {
     this.workerAvailable = false;
     try {
@@ -111,16 +169,21 @@ class App {
         console.warn('Web Worker error, falling back to direct runner:', err);
         this.workerAvailable = false;
         if (this.isRunning) {
-          this.dispatchDirectTask();
+          // Only kick off direct task if one isn't already scheduled/running
+          if (!this.directTimer) this.dispatchDirectTask();
         }
       };
-      this.workerAvailable = true;
+      // NOTE: workerAvailable stays false until 'worker_ready' is received.
+      // This prevents race conditions where tasks are sent before the worker
+      // module has finished loading engine.mjs.
     } catch (err) {
       console.warn('Web Worker initialization failed, falling back to direct compute:', err);
       this.worker = null;
       this.workerAvailable = false;
     }
   }
+
+  // ── State loading ──────────────────────────────────────────────────────────
 
   async loadState() {
     try {
@@ -131,8 +194,17 @@ class App {
     } catch (err) {
       console.warn('Notice: Failed loading initial state, continuing with defaults:', err);
     }
-    // Fetch and render leaderboard and stats
-    await this.refreshLeaderboard();
+
+    this._stateLoaded = true;
+
+    // Fetch and render leaderboard and stats (non-blocking for mining)
+    this.refreshLeaderboard().catch(() => {});
+
+    // If user already clicked Start while state was loading, kick off now
+    if (this._pendingStart) {
+      this._pendingStart = false;
+      this._startMining();
+    }
   }
 
   async refreshLeaderboard() {
@@ -220,7 +292,7 @@ class App {
       else if (val === 'balanced') this.dutyThrottle = 50;
       else this.dutyThrottle = 0;
 
-      if (this.worker) {
+      if (this.worker && this.workerAvailable) {
         this.worker.postMessage({ cmd: 'set_duty', throttleMs: this.dutyThrottle });
       }
     });
@@ -264,16 +336,35 @@ class App {
     });
   }
 
+  // ── Mining control ─────────────────────────────────────────────────────────
+
   start() {
+    if (this.isRunning) return;
     this.isRunning = true;
     this.saveIdentity();
+
+    // Update UI immediately for instant feedback
     if (this.el.statusIndicator) this.el.statusIndicator.className = 'indicator running';
     if (this.el.statusText) this.el.statusText.textContent = 'MINING ACTIVE';
     if (this.el.btnToggle) {
       this.el.btnToggle.textContent = 'PAUSE COMPUTE';
       this.el.btnToggle.classList.add('active');
     }
+    if (this.el.syncState && this.session.sessionBank.length === 0) {
+      this.el.syncState.textContent = 'Loading search state…';
+    }
 
+    // If remote state hasn't loaded yet, wait for it before dispatching tasks
+    // so we don't duplicate work already recorded in completed.json
+    if (!this._stateLoaded) {
+      this._pendingStart = true;
+      return;
+    }
+
+    this._startMining();
+  }
+
+  _startMining() {
     const now = Date.now();
     if (!this.sessionStartTimestamp) {
       this.sessionStartTimestamp = now;
@@ -296,16 +387,26 @@ class App {
     this.elapsedTimer = setInterval(() => this.updateElapsed(), 1000);
 
     if (!this.worker) this.initWorker();
+
     if (this.worker && this.workerAvailable) {
+      // Worker is ready – send start signal and first task
       try {
         this.worker.postMessage({ cmd: 'start', throttleMs: this.dutyThrottle });
       } catch {}
+      this.dispatchNextTask();
+    } else {
+      // Worker not ready yet (still loading) OR unavailable.
+      // Fall back to direct main-thread runner.
+      // If the worker loads later, handleWorkerMessage('worker_ready') will
+      // seamlessly take over.
+      this.dispatchDirectTask();
     }
-    this.dispatchNextTask();
   }
 
   stop() {
     this.isRunning = false;
+    this._pendingStart = false;
+
     if (this.directTimer) {
       clearTimeout(this.directTimer);
       this.directTimer = null;
@@ -332,6 +433,9 @@ class App {
         this.worker.postMessage({ cmd: 'stop' });
       } catch {}
     }
+
+    // Persist session state on pause
+    this.saveLocalSession();
   }
 
   updateElapsed() {
@@ -389,7 +493,25 @@ class App {
   }
 
   handleWorkerMessage({ data }) {
-    if (data.type === 'task_completed') {
+    if (data.type === 'worker_ready') {
+      // Worker finished loading engine.mjs – now safe to send tasks
+      this.workerAvailable = true;
+      console.log('Search worker ready:', data.engine);
+
+      // If we're already running (user clicked Start while worker was loading,
+      // so we fell back to direct mode), switch to worker mode now by stopping
+      // the direct-timer loop and kicking off worker dispatch instead.
+      if (this.isRunning) {
+        if (this.directTimer) {
+          clearTimeout(this.directTimer);
+          this.directTimer = null;
+        }
+        try {
+          this.worker.postMessage({ cmd: 'start', throttleMs: this.dutyThrottle });
+        } catch {}
+        this.dispatchNextTask();
+      }
+    } else if (data.type === 'task_completed') {
       this.handleTaskCompleted(data.result, data.elapsedMs);
     } else if (data.type === 'request_next_task') {
       this.dispatchNextTask();
@@ -399,13 +521,18 @@ class App {
     } else if (data.type === 'error') {
       console.warn('Worker error received, switching to direct compute runner:', data.message);
       this.workerAvailable = false;
-      this.dispatchDirectTask();
+      if (this.isRunning && !this.directTimer) {
+        this.dispatchDirectTask();
+      }
     }
   }
 
   handleTaskCompleted(result, elapsedMs) {
     if (!result) return;
     const recorded = this.session.recordTaskResult(result);
+
+    // Persist to localStorage after every completed task
+    this.saveLocalSession();
 
     // Instantaneous rate
     const elapsed = Math.max(elapsedMs || 100, 10) / 1000;
@@ -434,8 +561,18 @@ class App {
       this.renderPulseGraph();
     }
 
-    // Update submit/bank UI once at least 1 block is mined
-    const count = recorded.bankSize;
+    // Update submit/bank UI
+    this._updateBankUI(result);
+
+    // Check if sample cadence reached
+    const now = Date.now();
+    if (now - this.lastSampleTime >= this.GRAPH_INTERVAL_MS) {
+      this.sampleGraphPoint();
+    }
+  }
+
+  _updateBankUI(result) {
+    const count = this.session.sessionBank.length;
     if (count > 0) {
       if (this.el.btnSubmit) {
         this.el.btnSubmit.disabled = false;
@@ -446,17 +583,12 @@ class App {
       }
 
       const repoOwner = localStorage.getItem('114-repo-owner') || REPO_OWNER;
-      const repoName = localStorage.getItem('114-repo-name') || REPO_NAME;
-      const defaultTitle = `[REPORT] ${result.task.context} (${count} block${count > 1 ? 's' : ''})`;
+      const repoName  = localStorage.getItem('114-repo-name') || REPO_NAME;
+      const ctx = result?.task?.context || this.session.sessionBank[0]?.task?.context || '';
+      const defaultTitle = `[REPORT] ${ctx} (${count} block${count > 1 ? 's' : ''})`;
       if (this.el.btnGithubIssue) {
         this.el.btnGithubIssue.href = `https://github.com/${repoOwner}/${repoName}/issues/new?template=report.yml&title=${encodeURIComponent(defaultTitle)}`;
       }
-    }
-
-    // Check if sample cadence reached
-    const now = Date.now();
-    if (now - this.lastSampleTime >= this.GRAPH_INTERVAL_MS) {
-      this.sampleGraphPoint();
     }
   }
 

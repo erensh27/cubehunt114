@@ -279,7 +279,6 @@ def main():
         result = verify_and_apply(report, submitter)
     except Exception as e:
         print(f"FAILED: {e}")
-        # Write to GITHUB_OUTPUT if present
         gh_out = os.environ.get("GITHUB_OUTPUT")
         if gh_out:
             with open(gh_out, "a") as f:
@@ -307,14 +306,18 @@ def main():
         f"- Unique progress recorded into project database."
     )
     if has_sol == "true":
-        comment += f"\n\n### MATHEMATICAL DISCOVERY: x³+y³+z³=114 verified: `{result['found_solutions']}`"
+        comment += f"\n\n### MATHEMATICAL DISCOVERY: x\u00b3+y\u00b3+z\u00b3=114 verified: `{result['found_solutions']}`"
 
     gh_out = os.environ.get("GITHUB_OUTPUT")
     if gh_out:
+        # GitHub Actions requires the heredoc format for multiline output values.
+        # Plain `key=value\n` silently truncates at the first embedded newline.
         with open(gh_out, "a") as f:
             f.write("verified=true\n")
             f.write(f"has_solution={has_sol}\n")
-            f.write(f"comment_body={comment}\n")
+            f.write("comment_body<<GHEOF\n")
+            f.write(comment)
+            f.write("\nGHEOF\n")
 
 
 if __name__ == "__main__":
