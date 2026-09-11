@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.DS_Store
+*.tmp
+*.log
+report_*.json
+node_modules/
+.vercel/
+dist/

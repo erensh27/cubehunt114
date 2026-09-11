@@ -1,0 +1,18 @@
+{
+  "name": "project-114",
+  "version": "1.0.0",
+  "description": "Distributed mathematical search for x^3 + y^3 + z^3 = 114 using cubic-field norm sieves",
+  "type": "module",
+  "scripts": {
+    "test": "python3 -m unittest discover -s tests -p test_search.py",
+    "serve": "python3 -m http.server 8000"
+  },
+  "keywords": [
+    "diophantine-equations",
+    "sum-of-three-cubes",
+    "distributed-computing",
+    "number-theory",
+    "booker-sutherland"
+  ],
+  "license": "GPL-2.0-or-later"
+}

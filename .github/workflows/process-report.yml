@@ -1,0 +1,82 @@
+name: Process Report
+
+on:
+  issues:
+    types: [opened, edited]
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: process-report-ledger
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    if: startsWith(github.event.issue.title, '[REPORT]') || startsWith(github.event.issue.title, '[report]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Verify submission and replay task
+        id: verifier
+        continue-on-error: true
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_SUBMITTER: ${{ github.event.issue.user.login }}
+        run: |
+          python3 tools/verify_submission.py
+
+      - name: Handle successful verification
+        if: steps.verifier.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          COMMENT_BODY: ${{ steps.verifier.outputs.comment_body }}
+        run: |
+          git config user.name "114-bot"
+          git config user.email "bot@project114.internal"
+          git add data/
+          git diff --cached --quiet || git commit -m "verify: record report #${ISSUE_NUMBER}"
+          git push origin main
+          gh issue comment "$ISSUE_NUMBER" --body "${COMMENT_BODY}"
+          gh issue edit "$ISSUE_NUMBER" --add-label "verified"
+          gh issue close "$ISSUE_NUMBER" --reason "completed"
+
+      - name: Alert on confirmed solution
+        if: steps.verifier.outcome == 'success' && steps.verifier.outputs.has_solution == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SUBMITTER: ${{ github.event.issue.user.login }}
+          ORIGINAL_ISSUE: ${{ github.event.issue.number }}
+        run: |
+          gh issue create \
+            --title "🎉 MATHEMATICAL SOLUTION CONFIRMED: x³ + y³ + z³ = 114" \
+            --body "A valid representation has been independently verified and archived!
+            
+          Reported by: @${SUBMITTER}
+          Original report: #${ORIGINAL_ISSUE}
+          Registry: \`data/solutions.json\`" \
+            --label "solution"
+
+      - name: Handle rejected submission
+        if: steps.verifier.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REASON: ${{ steps.verifier.outputs.comment_body }}
+        run: |
+          gh issue comment "$ISSUE_NUMBER" --body "❌ **Submission Rejected**: ${REASON:-Verification failed. Please ensure the digest was not modified and matches the canonical engine.}"
+          gh issue edit "$ISSUE_NUMBER" --add-label "rejected"
+          gh issue close "$ISSUE_NUMBER" --reason "not planned"
