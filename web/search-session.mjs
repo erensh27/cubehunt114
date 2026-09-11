@@ -161,7 +161,7 @@ export class SearchSession {
 
     const issueTitle = `[REPORT] ${firstTask.context} (row ${firstTask.row}, ${taskCount} block${taskCount > 1 ? 's' : ''})`;
 
-    const markdownBody = [
+    const compactBody = [
       `### Search Verification Report`,
       `- Contributor: **${reportObj.contributor.name}** (@${reportObj.contributor.github || 'anonymous'})`,
       `- Verified Blocks Mined: \`${taskCount}\``,
@@ -176,6 +176,10 @@ export class SearchSession {
       `digest: ${this.sessionBank[0].digest}`,
       `combinations: ${totalCombos}`,
       `<!-- end-114-report -->`,
+    ].join('\n');
+
+    const markdownBody = [
+      compactBody,
       ``,
       `\`\`\`json`,
       JSON.stringify(reportObj, null, 2),
@@ -185,6 +189,7 @@ export class SearchSession {
     return {
       title: issueTitle,
       body: markdownBody,
+      compactBody: compactBody,
       json: reportObj,
     };
   }

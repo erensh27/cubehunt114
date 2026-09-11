@@ -25,6 +25,10 @@ class App {
     // Visual telemetry buffer
     this.vizHistory = [];
     this.lastTaskStatus = 'STANDBY';
+    this.lastGraphSampleTime = performance.now();
+    this.intervalCombos = 0;
+    this.GRAPH_INTERVAL_MS = 4500; // Sample graph every 4.5 seconds
+    this.currentIssueUrl = '';
     this.activeFilterCounters = {
       generators: 0,
       quotient_points: 0,
@@ -189,13 +193,14 @@ class App {
       }
     });
 
-    this.el.inputName.addEventListener('change', e => {
-      localStorage.setItem('114-name', e.target.value.trim());
-    });
-
-    this.el.inputGithub.addEventListener('change', e => {
-      localStorage.setItem('114-github', e.target.value.trim());
-    });
+    const saveIdentity = () => {
+      localStorage.setItem('114-name', this.el.inputName.value.trim());
+      localStorage.setItem('114-github', this.el.inputGithub.value.trim());
+    };
+    this.el.inputName.addEventListener('input', saveIdentity);
+    this.el.inputGithub.addEventListener('input', saveIdentity);
+    this.el.inputName.addEventListener('change', saveIdentity);
+    this.el.inputGithub.addEventListener('change', saveIdentity);
 
     this.el.btnSubmit.addEventListener('click', () => {
       this.openSubmitModal();
@@ -214,6 +219,15 @@ class App {
           this.el.btnCopyReport.textContent = orig;
         }, 2000);
       });
+    });
+
+    this.el.btnGithubIssue.addEventListener('click', e => {
+      // Auto-copy full report JSON to clipboard before navigating
+      navigator.clipboard.writeText(this.el.reportBody.value).catch(() => {});
+      if (this.currentIssueUrl) {
+        window.open(this.currentIssueUrl, '_blank', 'noopener,noreferrer');
+        e.preventDefault();
+      }
     });
   }
 
@@ -288,13 +302,20 @@ class App {
       } else {
         this.lastTaskStatus = `SHELL EXCLUSION (${result.counters.generators.toLocaleString()} GEN)`;
       }
-      this.vizHistory.push({
-        time: performance.now(),
-        rate: avgRate,
-        combos: recorded.combinations,
-        context: result.task.context,
-      });
-      if (this.vizHistory.length > 100) this.vizHistory.shift();
+      // Accumulate combinations for the 4.5s interval sampling
+      this.intervalCombos += recorded.combinations;
+      const now = performance.now();
+      if (now - this.lastGraphSampleTime >= this.GRAPH_INTERVAL_MS) {
+        const elapsedSec = (now - this.lastGraphSampleTime) / 1000;
+        const intervalRate = Math.round(this.intervalCombos / elapsedSec);
+        this.vizHistory.push({
+          time: now,
+          rate: intervalRate,
+        });
+        if (this.vizHistory.length > 35) this.vizHistory.shift();
+        this.lastGraphSampleTime = now;
+        this.intervalCombos = 0;
+      }
     } else if (data.type === 'request_next_task') {
       this.dispatchNextTask();
     } else if (data.type === 'solution_found') {
@@ -318,13 +339,17 @@ class App {
     this.el.reportTitle.value = report.title;
     this.el.reportBody.value = report.body;
 
-    // Build GitHub Issues new URL
-    const url = new URL(`https://github.com/${REPO_OWNER}/${REPO_NAME}/issues/new`);
+    const repoOwner = localStorage.getItem('114-repo-owner') || REPO_OWNER;
+    const repoName = localStorage.getItem('114-repo-name') || REPO_NAME;
+
+    // Use compactBody for URL so it never exceeds browser query limits (HTTP 414)
+    const url = new URL(`https://github.com/${repoOwner}/${repoName}/issues/new`);
     url.searchParams.set('title', report.title);
-    url.searchParams.set('body', report.body);
+    url.searchParams.set('body', report.compactBody);
     url.searchParams.set('labels', 'report');
 
-    this.el.btnGithubIssue.href = url.toString();
+    this.currentIssueUrl = url.toString();
+    this.el.btnGithubIssue.href = this.currentIssueUrl;
     this.el.modalReport.classList.remove('hidden');
   }
 
