@@ -1,9 +1,17 @@
 {
   "version": 1,
-  "updated": "2026-09-12T04:09:02Z",
-  "total_combinations": 6086425769,
-  "total_verified_tasks": 3389770,
+  "updated": "2026-09-12T04:13:03Z",
+  "total_combinations": 6291225769,
+  "total_verified_tasks": 3489770,
   "contributors": [
+    {
+      "name": "eren4710",
+      "github": "erensh27",
+      "verified_tasks": 1756865,
+      "combinations": 3629482153,
+      "best_delta": null,
+      "last_active": "2026-09-12T04:13:01Z"
+    },
     {
       "name": "DakshD1509",
       "github": "DakshD1509",
@@ -11,14 +19,6 @@
       "combinations": 2584944640,
       "best_delta": null,
       "last_active": "2026-09-11T18:05:06Z"
-    },
-    {
-      "name": "eren4710",
-      "github": "erensh27",
-      "verified_tasks": 1656865,
-      "combinations": 3424682153,
-      "best_delta": null,
-      "last_active": "2026-09-12T04:09:00Z"
     },
     {
       "name": "Agent007",
