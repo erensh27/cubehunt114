@@ -75,15 +75,21 @@ def save_bucket(context: str, bucket: str, task_ids: set[str], updated: str) -> 
             old_path.unlink()
 
 
-def total_verified_count() -> int:
-    total = 0
+def verified_counts_by_context() -> dict[str, int]:
+    counts: dict[str, int] = {}
     for path in LEDGER_DIR.glob("c??/*-*.json"):
+        ctx = path.parent.name
         with path.open(encoding="utf-8") as f:
             for _ in range(15):
                 line = f.readline()
                 if not line:
                     break
                 if "verified_count" in line:
-                    total += int(line.split(":", 1)[1].strip().rstrip(","))
+                    counts[ctx] = counts.get(ctx, 0) + int(line.split(":", 1)[1].strip().rstrip(","))
                     break
-    return total
+    return counts
+
+
+def total_verified_count() -> int:
+    return sum(verified_counts_by_context().values())
+

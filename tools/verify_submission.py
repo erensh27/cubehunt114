@@ -273,6 +273,10 @@ def verify_and_apply(report_data: dict, submitter_login: str) -> dict:
 
         combos = replay_result["counters"].get("generators", 0) + replay_result["counters"].get("quotient_points", 0)
         total_new_combinations += combos
+        blocks_data.setdefault("total_blocks", {})
+        blocks_data["total_blocks"][ctx] = blocks_data["total_blocks"].get(ctx, 0) + 1
+        blocks_data.setdefault("total_combinations", {})
+        blocks_data["total_combinations"][ctx] = blocks_data["total_combinations"].get(ctx, 0) + combos
 
         # Check hits for exact solution
         for hit in replay_result.get("hits", []):
