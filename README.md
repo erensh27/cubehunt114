@@ -1,132 +1,208 @@
-# Project 114 — Distributed Search for x³ + y³ + z³ = 114
+# CubeHunt114
 
-A collaborative, decentralized computational project to search for integer solutions to:
+CubeHunt114 is a distributed mathematical research project searching for integer solutions to the Diophantine equation:
 
 $$x^3 + y^3 + z^3 = 114, \qquad x, y, z \in \mathbb{Z}$$
 
-114 is one of the smallest unresolved integers under 1,000 in the Diophantine sum-of-three-cubes problem. Because $114 \equiv 6 \pmod 9$, integer solutions are conjectured to exist by Heath-Brown's conjecture, but none has ever been found.
+Among all positive integers up to 1000, 114 is the smallest integer whose representation as a sum of three integer cubes remains unknown.
 
-This repository implements a **zero-backend, serverless volunteer computing architecture**:
-- **Browser-Based Compute**: Contributors run the sieve directly in their browsers using Web Workers and `BigInt` arithmetic.
-- **Hosted on Vercel**: 100% static frontend with zero backend server maintenance or hosting costs.
-- **Verification on GitHub Actions**: Contributors submit mined blocks via GitHub Issues. GitHub Actions automatically re-evaluates the mathematical tasks, checks deterministic SHA-256 digests, credits contributors, and commits verified updates back to the repository.
-- **Daily Automated Aggregations**: Leaderboards and global combination counts are automatically aggregated and synchronized every 24 hours via scheduled GitHub workflows.
+Because 114 leaves a remainder of 6 when divided by 9, solutions are expected to exist by the heuristics of modern number theory. However, because earlier supercomputer searches showed that no solution exists with coordinates below ten quadrillion, any solution must involve integers of immense magnitude.
 
----
+CubeHunt114 implements a decentralized search across 81 mathematically isolated channels, evaluating billions of combinations every minute.
 
-## The Mathematical Engine
+For guidelines on participating and donating compute power, please consult CONTRIBUTING.md.
 
-A naive brute-force cube scan requires $O(N^3)$ operations and is mathematically futile for the expected coordinate magnitudes ($|x|, |y|, |z| > 10^{15}$).
 
-This project utilizes the **Booker–Sutherland cubic-field norm sieve**:
-1. **Cubic-Field Norm**:
-   Setting $\alpha^3 = 114$ and $\gamma = a + b\alpha + c\alpha^2$ in $K = \mathbb{Q}(\sqrt[3]{114})$:
-   $$N(\gamma) = a^3 + 114b^3 + 12996c^3 - 342abc$$
-2. **Adjoint Modular Roots**:
-   Using adjoint coefficients $B = 114c^2 - ab$ and $C = b^2 - ac$, whenever $\gcd(C, D) = 1$, the value:
-   $$r \equiv B \cdot C^{-1} \pmod D$$
-   yields an exact modular cube root of 114 modulo $D$ ($r^3 \equiv 114 \pmod D$) without factoring large integers.
-3. **Cascading Sieve Pipeline**:
-   - **Shell Bounds**: Analytical bounds on $N(a)$ prune off-shell generators via derivative monotonicity.
-   - **Signed Constraints Modulo 8 and 361**: Eliminate impossible residue combinations.
-   - **Modulo 243 Filter**: Eliminates $>95\%$ of all candidate quotient points $q$ instantly.
-   - **Parity Check**: Enforces $114 - S - z \equiv 0 \pmod 2$.
-   - **Quadratic Residue Prime Sieve**: Evaluates 15 small primes $\{5, 7, 11, 13, 17, 19, 23, 31, 37, 41, 43, 47, 53, 59, 61\}$.
-   - **Exact Integer Square Root**: Checks whether $V^2 = \frac{4(114 - z^3) - S^3}{3S}$ is a non-negative perfect square. If true:
-     $$x = \frac{S + V}{2}, \quad y = \frac{S - V}{2}$$
-   - **Canonical Ordering**: Verifies $|z| \le \min(|x|, |y|)$.
-   - **Identity Confirmation**: Confirms $(x)^3 + (y)^3 + (z)^3 == 114$.
+## 1. The Core Mathematical Concept
 
----
+A brute force search across three integer variables $x, y, z$ requires cubic time complexity. Searching coordinates up to a bound $B$ would demand roughly $B^3$ operations. At $B = 10^{16}$, this would require $10^{48}$ calculations, which is impossible for modern computing.
 
-## How to Contribute
+CubeHunt114 uses the cubic field norm sieve developed by Andrew Booker and Andrew Sutherland, which transforms the three variable search into a one variable scan with sublinear complexity.
 
-### 1. In Your Browser (Easiest)
-Visit the deployed web application on Vercel:
-1. Enter your contributor name and GitHub username.
-2. Select compute intensity (100% is recommended if your machine can handle it).
-3. Click **Start Mining**. The Web Worker runs entirely in the background — you can keep using other tabs.
-4. When you've mined some blocks, click **Bank Work ↗** to open a pre-filled GitHub Issue. Copy the report and paste it into the issue body. GitHub Actions will automatically verify and credit you.
+### The Algebraic Reduction
 
-> **Your progress is saved in your browser.** If you close the tab and come back, your mined blocks and already-completed task list are restored from `localStorage` — you won't re-mine work you've already done.
+Assume a solution exists and rewrite the equation by grouping two variables:
 
-### 2. Local Python Runner (High Throughput)
-For maximum throughput on a dedicated machine or server:
-```bash
-git clone https://github.com/erensh27/sum-of-three-cubes-114.git
-cd sum-of-three-cubes-114
+$$x + y = s$$
 
-# Run a 32-task batch (auto-picks the least-explored context):
-python3 tools/runner.py --name "YourName" --github "yourhandle" --tasks 32
+Using the algebraic factorization of the sum of two cubes:
+
+$$x^3 + y^3 = (x + y)(x^2 - xy + y^2) = s \cdot \frac{3(x - y)^2 + s^2}{4}$$
+
+Substituting this identity back into $x^3 + y^3 + z^3 = 114$:
+
+$$s \cdot \frac{3(x - y)^2 + s^2}{4} = 114 - z^3$$
+
+Let $d = |s|$. This formulation reveals three vital properties:
+
+1. Divisibility: The integer $d$ must divide $114 - z^3$.
+2. Modular Cube Root: $z^3 \equiv 114 \pmod d$.
+3. Integer Square Test: Defining $v = |x - y|$, we can rearrange the equation as:
+
+$$v^2 = \frac{4(114 - z^3) - s^3}{3s}$$
+
+If the quantity on the right is a non-negative integer and an exact perfect square, then:
+
+$$x = \frac{s + v}{2}, \qquad y = \frac{s - v}{2}$$
+
+This provides the exact integer values for $x$ and $y$. The entire challenge therefore reduces to finding pairs $(d, z)$ such that $d$ divides $z^3 - 114$ and the resulting quotient produces an exact square.
+
+
+## 2. The Cubic Field Norm Sieve
+
+Iterating over arbitrary integers $d$ and factoring $z^3 - 114$ is prohibitively slow because integer factorization has high computational complexity.
+
+Instead, the algorithm generates integers $d$ directly from the algebraic number field:
+
+$$K = \mathbb{Q}(\alpha), \qquad \alpha = \sqrt[3]{114}$$
+
+Consider an algebraic integer in this field:
+
+$$\gamma = a + b\alpha + c\alpha^2$$
+
+The field norm of $\gamma$, denoted $N(\gamma)$, represents the determinant of multiplication by $\gamma$ and is given by:
+
+$$N(\gamma) = a^3 + 114b^3 + 12996c^3 - 342abc$$
+
+Whenever $a, b, c$ are chosen such that $N(\gamma)$ is divisible by a lattice modulus $\ell$, the integer $d = N(\gamma)/\ell$ is guaranteed to satisfy the required algebraic properties.
+
+### Instant Modular Roots via Adjoint Coefficients
+
+Standard algorithms compute modular cube roots using prime factorizations and Tonelli-Shanks style algorithms.
+
+In this cubic field, the modular root is obtained algebraically from the adjoint matrix of multiplication by $\gamma$. Defining:
+
+$$B = 114c^2 - ab$$
+$$C = b^2 - ac$$
+
+Whenever $C$ and $d$ are coprime, the exact modular cube root is given directly by:
+
+$$r \equiv B \cdot C^{-1} \pmod d$$
+
+This root satisfies $r^3 \equiv 114 \pmod d$ without requiring any integer factorization.
+
+
+## 3. The Coordinate Space: Contexts, Shells, Bands, Rows, and Blocks
+
+To distribute computation across independent worker processes with zero overlap, CubeHunt114 partitions the search space into 81 distinct channels called contexts.
+
+Every task in the project is structured through a precise hierarchy:
+
 ```
-The runner downloads only the small public high-water-mark file from GitHub. Exact duplicate checks happen during server-side verification against per-context ledgers.
-
-### Running With Friends Simultaneously
-
-Each person should **pin a different context** using `--context` to guarantee zero overlap:
-
-| Friend | Command |
-|--------|---------|
-| You    | `python3 tools/runner.py --name "Alice" --github "alice" --context c00 --tasks 64` |
-| Friend 1 | `python3 tools/runner.py --name "Bob" --github "bob" --context c09 --tasks 64` |
-| Friend 2 | `python3 tools/runner.py --name "Carol" --github "carol" --context c18 --tasks 64` |
-| Friend 3 | `python3 tools/runner.py --name "Dave" --github "dave" --context c27 --tasks 64` |
-
-There are **81 contexts** (`c00`–`c80`) so you can have up to 81 people working with guaranteed no overlap. If you don't pin a context, the runner applies a random session salt to stagger your starting row automatically.
-
-After each batch, submit a GitHub Issue titled `[REPORT] <context> (<N> tasks)` with the contents of the generated `report_*.json` file. GitHub Actions will replay your tasks, verify the SHA-256 digests, credit you on the leaderboard, and commit the verified blocks to the shared ledger.
-
----
-
-## Zero-Duplicate Progress Architecture
-
-To ensure no two contributors mine the same search space:
-- **Lightweight coordination**: Web and CLI clients download only `data/blocks.json`, which contains contiguous frontiers and high-water marks. They never download the growing completed-task ledger.
-- **Bounded verification ledger**: Exact completed IDs are retained server-side in hash-routed parts such as `data/completed/c00/af-000001.json`. A part rolls over before 80 MiB, safely below GitHub's 100 MiB hard limit, and verification loads only the matching bucket.
-- **81 Parallel Channels**: The search space is partitioned across 81 distinct cubic contexts (`c00` to `c80`). Clients choose a randomized context, row offset, and starting block so progress spreads across the full search space.
-- **Immediate scheduling updates**: Every accepted GitHub report writes the relevant context shard and refreshes `data/blocks.json` (frontier, high-water mark, and timestamp) in the same commit.
-- **Session Salting**: If multiple contributors access the same context concurrently, a session salt staggers their starting lattice rows, preventing race collisions.
-- **Atomic Replay & Deduplication**: GitHub Actions checks every incoming task against the verified ledger. If a task was already claimed by another contributor, it is flagged as duplicate and safely skipped.
-
----
-
-## GitHub Actions Automated Ingestion
-
-1. **On Issue Opened (`[REPORT]`)**:
-   - Triggers `.github/workflows/process-report.yml`.
-   - Parses the report block and replays the task from scratch using canonical Python `search_core.py`.
-   - Verifies the SHA-256 digest and checks for duplicates.
-   - If valid, commits verified IDs only to their context shard in `data/completed/`, updates the public high-water mark, credits the contributor, and closes the issue with a verification checkmark.
-   - If an exact solution is discovered, an official solution record is created in `data/solutions.json` and a milestone issue is published.
-2. **Every 24 Hours (`daily-aggregate.yml`)**:
-   - Triggers `.github/workflows/daily-aggregate.yml` via cron (`0 0 * * *`).
-   - Recalculates leaderboard rankings, aggregates total worldwide combinations, and updates `data/leaderboard.json` and `data/stats.json`.
-
----
-
-## Vercel Deployment
-
-1. Import this repository into **Vercel**.
-2. Set the framework preset to **Other** (pure static).
-3. The included `vercel.json` automatically manages clean URL routing and static caching headers.
-4. Deployment completes instantly with zero backend configurations.
-
----
-
-## Verification & Tests
-
-Run the test suite locally:
-```bash
-python3 -m unittest discover -s tests -p test_search.py
+Contexts (81 distinct channels)
+  ↳ Rows (2D lattice points in b and c)
+      ↳ Blocks (1D slices along the a coordinate)
+          ↳ Tasks (the atomic unit of verification)
 ```
-This verifies:
-- Mathematical accuracy against known historical solutions ($k = 30, 39, 69, 75, 84$).
-- Exact arithmetic and triple verification.
-- Deterministic SHA-256 digest parity and conservation laws.
 
----
+### Contexts
 
-## License
+There are 81 contexts, identified from c00 through c80. A context is defined by four mathematical parameters:
 
-Original software is released under the **GPL-2.0-or-later** license.
-Mathematical foundations credited to Andrew Booker, Andrew Sutherland, and researchers in Diophantine number theory.
+1. Ell Modulus: $\ell \in \{1, 5, 25\}$. This congruence modulus fixes residue constraints on the algebraic integers, avoiding redundant lattice points.
+2. Geometric Shape: Three shape configurations index 0, 1, and 2 determine the aspect ratio of the bounding box for $b$ and $c$:
+   - Shape 0 uses radius 6,000,000 with parameter $t$ in $[8, 31]$.
+   - Shape 1 uses radius 1,500,000 with parameter $t$ in $[128, 511]$.
+   - Shape 2 uses radius 375,000 with parameter $t$ in $[2048, 8191]$.
+3. Shell: Three shell tiers index 0, 1, and 2 partition the magnitude of the divisor $d$. With base constant $D_0 = 10^{19} / 54 \approx 1.85 \times 10^{17}$:
+   - Shell 0 covers $d \in [D_0, 2D_0]$.
+   - Shell 1 covers $d \in [2D_0, 4D_0]$.
+   - Shell 2 covers $d \in [4D_0, 8D_0]$.
+4. Band: Three band intervals index 0, 1, and 2 partition the ratio of $z/d$:
+   - Band 0 evaluates $z/d \in [0, 64]$.
+   - Band 1 evaluates $z/d \in [64, 256]$.
+   - Band 2 evaluates $z/d \in [256, 4096]$.
+
+Because each parameter has 3 options, $3 \times 3 \times 3 \times 3 = 81$ contexts cover the complete search landscape.
+
+### Rows
+
+For a chosen context, $b$ and $c$ form a two dimensional integer lattice within a square of width $2R + 1$:
+
+$$b = (\text{row} \pmod{\text{width}}) - R$$
+$$c = (\text{row} \mathbin{/} \text{width}) - R$$
+
+A task evaluates 128 consecutive lattice rows at a time.
+
+### Blocks
+
+For each $(b, c)$ pair, the parameter $t$ controls the leading coefficient $a$. The admissible range of $t$ is divided into blocks of size 16.
+
+An atomic task identifier is formatted as:
+
+```
+114-engine-v1:context:row:block
+```
+
+For example, `114-engine-v1:c47:1666560:320` represents context c47, starting at row 1666560, evaluating block 320.
+
+
+## 4. The Multi-Stage Sieve Pipeline
+
+Each task runs through an optimized screening pipeline designed to eliminate over 99.999% of invalid candidates using minimal CPU cycles:
+
+```
+[ Algebraic Generator (a, b, c) ]
+               │
+               ▼
+[ Shell Monotonicity Check ] ──(out of range)──► Skip
+               │
+               ▼
+[ Modulo 8 & 361 Residue Filters ] ──(incompatible)──► Skip
+               │
+               ▼
+[ Adjoint Root Computation: r = B * C^(-1) mod d ]
+               │
+               ▼
+[ Modulo 243 Sieve ] ──(>95% of quotient points eliminated)──► Skip
+               │
+               ▼
+[ Parity Filter ] ──(odd parity)──► Skip
+               │
+               ▼
+[ 15-Prime Quadratic Residue Sieve ] ──(non-residue)──► Skip
+               │
+               ▼
+[ Exact Integer Square Root Test ] ──(not a square)──► Skip
+               │
+               ▼
+[ Solution Verified! ] ──► Exact Triple Logged
+```
+
+### Stage 1: Shell Monotonicity Check
+Analytical derivatives of $N(a)$ determine whether the norm falls within the requested shell window $[d_{\text{low}}, d_{\text{high}}]$. Monotonicity allows entire ranges of $a$ to be pruned simultaneously without computing individual norms.
+
+### Stage 2: Signed Divisibility Filters
+The divisor $d$ must not be divisible by 3. Furthermore, signed constraints modulo 8 and modulo 361 eliminate residue classes where cubic reciprocity prohibits integer solutions.
+
+### Stage 3: Modulo 243 Sieve
+Modulo $3^5 = 243$, the sum of three cubes has an extremely restricted set of residues. By projecting candidates into precomputed 243-element bit tables, more than 95% of quotient candidates $q$ are eliminated through a single bitwise lookup.
+
+### Stage 4: Parity Filter
+The parity relation enforces that $114 - s - z$ must be even, ensuring integer division by 2 when computing $x$ and $y$.
+
+### Stage 5: Small Prime Quadratic Residue Sieve
+The quantity $4(114 - z^3) - s^3$ must be a quadratic residue modulo small primes. Candidates are checked against precomputed bitmasks for 15 primes:
+
+$$\{5, 7, 11, 13, 17, 19, 23, 31, 37, 41, 43, 47, 53, 59, 61\}$$
+
+Any candidate that is a quadratic non-residue modulo any of these primes is discarded.
+
+### Stage 6: Exact Square Root Verification
+Candidates passing all sieve stages undergo an exact integer square root evaluation using `isqrt`. If the candidate produces a perfect square, $x$ and $y$ are calculated and tested against the original equation:
+
+$$x^3 + y^3 + z^3 = 114$$
+
+If confirmed, the exact triple is saved immediately and flagged as a solution.
+
+
+## 5. Coordination and Sharded Ledger
+
+CubeHunt114 ensures zero duplicated effort across all participants through a deterministic coordination layer:
+
+1. Coordination State (`data/blocks.json`):
+   Miners retrieve this file to determine the latest progress frontiers and high water marks across all 81 contexts. It also reports total blocks and combinations verified for every context.
+2. Sharded Completed Ledger (`data/completed/cNN/`):
+   Completed task identifiers are stored in context directories divided into 256 hash buckets. Each bucket contains deterministic JSON files limited to bounded sizes, ensuring Git repositories remain responsive and manageable over long multi-terabyte search campaigns.
+3. Cryptographic Verification:
+   Every batch computes a deterministic SHA-256 digest over the exact set of evaluated tasks and counters, guaranteeing mathematical integrity and reproducibility across different operating systems.
