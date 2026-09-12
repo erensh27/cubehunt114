@@ -325,6 +325,10 @@ def verify_and_apply(report_data: dict, submitter_login: str) -> dict:
         }
         contributors.append(entry)
 
+    if name and name != "Anonymous":
+        entry["name"] = name
+    if gh_handle:
+        entry["github"] = gh_handle
     entry["verified_tasks"] += accepted_count
     entry["combinations"] += total_new_combinations
     entry["last_active"] = now_iso()
