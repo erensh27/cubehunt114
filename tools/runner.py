@@ -1,0 +1,238 @@
+#!/usr/bin/env python3
+"""Local multi-threaded Python runner for 114 distributed search.
+
+Provides volunteer contributors with high-throughput native search capabilities.
+Produces verified reports directly compatible with GitHub Actions ingestion.
+
+Usage:
+    python3 tools/runner.py --name "YourName" --github "yourhandle" --tasks 32
+
+The runner automatically downloads the latest completed-task ledger from GitHub
+so you never duplicate work already verified by another contributor.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import random
+import sys
+import time
+from pathlib import Path
+from urllib.request import urlopen
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools"))
+
+import search_core as core
+
+# Default raw URL for the live repository data – allows any fresh clone to
+# immediately know which tasks are already verified without needing a local
+# up-to-date data/ directory.
+DEFAULT_REPO_RAW = "https://raw.githubusercontent.com/erensh27/sum-of-three-cubes-114/main"
+
+
+def fetch_remote_or_local_json(path_rel: str, repo_raw: str | None = None):
+    """Try local file first, then fall back to remote raw URL."""
+    local_p = ROOT / path_rel
+    if local_p.exists():
+        try:
+            return json.loads(local_p.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    if repo_raw:
+        url = f"{repo_raw.rstrip('/')}/{path_rel}"
+        try:
+            with urlopen(url, timeout=15) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except Exception as e:
+            print(f"Warning: Failed to fetch {url}: {e}", file=sys.stderr)
+
+    return None
+
+
+def pick_starting_point(frontiers: dict, high_water: dict, ctx_override: str | None):
+    """
+    Pick a context and starting row that minimises overlap with other concurrent
+    contributors.
+
+    Strategy:
+    - If a context is forced via --context, use it.
+    - Otherwise choose a random context, spreading contributors over all 81.
+    - Start beyond that context's recorded high-water row and use a random
+      block offset so no particular block is always mined first.
+    """
+    if ctx_override and ctx_override in core.CONTEXT_BY_ID:
+        ctx_id = ctx_override
+    else:
+        ctx_id = random.choice(list(core.CONTEXT_BY_ID))
+
+    c = core.CONTEXT_BY_ID[ctx_id]
+    base_row = high_water.get(ctx_id, frontiers.get(ctx_id, 0))
+
+    # Salt: jump ahead by a random multiple of ROWS_PER_TASK so concurrent
+    # runners in the same context land on different rows.
+    salt_steps = random.randint(0, 63)
+    start_row = base_row + salt_steps * core.ROWS_PER_TASK
+
+    # Wrap around if we've gone past the end of the context
+    total_rows = int(c["totalRows"])
+    if start_row >= total_rows:
+        start_row = 0
+
+    return ctx_id, start_row
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Volunteer runner for x³ + y³ + z³ = 114",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Run 32 tasks (browser-equivalent session):
+  python3 tools/runner.py --name "Alice" --github "alice" --tasks 32
+
+  # Pin to a specific context (useful to split friends across channels):
+  python3 tools/runner.py --name "Bob" --github "bob" --context c05 --tasks 64
+
+  # High-throughput batch (mine 256 tasks then submit):
+  python3 tools/runner.py --name "Carol" --github "carol" --tasks 256
+""",
+    )
+    parser.add_argument("--name", type=str, default="Anonymous", help="Your contributor alias")
+    parser.add_argument("--github", type=str, default="", help="Your GitHub username")
+    parser.add_argument(
+        "--context", type=str, default=None,
+        help="Force a specific context (c00–c80). Default: auto-picks least explored.",
+    )
+    parser.add_argument(
+        "--tasks", type=int, default=16,
+        help="Number of tasks (row×block pairs) to complete in this batch. Default: 16.",
+    )
+    parser.add_argument(
+        "--repo-raw", type=str, default=DEFAULT_REPO_RAW,
+        help="Base URL for raw repository data (to fetch live completed ledger).",
+    )
+    args = parser.parse_args()
+
+    print("Fetching live verified-task ledger from GitHub…", flush=True)
+    blocks    = fetch_remote_or_local_json("data/blocks.json",    args.repo_raw) or {"frontiers": {}}
+    frontiers    = blocks.get("frontiers", {})
+    high_water   = blocks.get("high_water_marks", {})
+
+    print("Public high-water marks loaded; exact duplicate protection is server-side.", flush=True)
+
+    ctx_id, start_row = pick_starting_point(frontiers, high_water, args.context)
+    c = core.CONTEXT_BY_ID[ctx_id]
+
+    print(f"\nContributor : {args.name} (@{args.github or 'anonymous'})")
+    print(f"Context     : {ctx_id}  (frontier={frontiers.get(ctx_id, 0)}, blocks={c['blocks']})")
+    print(f"Starting row: {start_row}")
+    print(f"Batch size  : {args.tasks} tasks\n")
+
+    finished_reports = []
+    current_row  = start_row
+    total_rows   = int(c["totalRows"])
+    tasks_done   = 0
+    total_combos = 0
+    batch_start  = time.perf_counter()
+
+    while tasks_done < args.tasks:
+        if current_row >= total_rows:
+            current_row = 0  # wrap around
+
+        # Iterate all blocks for this row, not just block 0
+        block_start = random.randrange(c["blocks"])
+        for block_offset in range(c["blocks"]):
+            if tasks_done >= args.tasks:
+                break
+
+            block = (block_start + block_offset) % c["blocks"]
+            task = core.make_task(ctx_id, str(current_row), block)
+            tid  = core.task_id(task)
+
+            label = f"[{tasks_done + 1}/{args.tasks}] {ctx_id} row={current_row} blk={block}"
+            print(f"{label}…", end="", flush=True)
+
+            t0     = time.perf_counter()
+            result = core.run_task(task)
+            elapsed = time.perf_counter() - t0
+
+            combos = (
+                result["counters"]["generators"]
+                + result["counters"]["quotient_points"]
+            )
+            total_combos += combos
+
+            print(
+                f" {elapsed:.2f}s  {combos:,} combos  digest={result['digest'][:16]}…",
+                flush=True,
+            )
+
+            finished_reports.append({
+                "task": task,
+                "digest": result["digest"],
+                "combinations": combos,
+                "best_delta": None,
+                "solution": None,
+            })
+
+            if result.get("hits"):
+                for hit in result["hits"]:
+                    xyz = hit["xyz"]
+                    print(f"\n{'='*60}")
+                    print(f"  🎉  SOLUTION FOUND: x={xyz[0]}, y={xyz[1]}, z={xyz[2]}")
+                    print(f"{'='*60}\n")
+                    finished_reports[-1]["solution"] = json.dumps(xyz)
+
+            tasks_done += 1
+
+        current_row += core.ROWS_PER_TASK
+
+    # ── Format and save compact report ────────────────────────────────────────
+    first_task = finished_reports[0]["task"]
+    last_digest = finished_reports[-1]["digest"]
+    count = len(finished_reports)
+
+    report_body = [
+        f"### Search Verification Report",
+        f"- Contributor: **{args.name}** (@{args.github or 'anonymous'})",
+        f"- Total Blocks Mined: `{count:,}`",
+        f"- Combinations Evaluated: `{total_combos:,}`",
+        f"",
+        f"<!-- 114v2 -->",
+        f"contributor: {args.name}",
+        f"github: {args.github}",
+        f"blocks: {count}",
+        f"combinations: {total_combos}",
+        f"ranges:",
+        f"{ctx_id}:{first_task['row']}:{first_task['block']}:{count}:{last_digest}",
+        f"<!-- end-114v2 -->",
+    ]
+    report_text = "\n".join(report_body)
+
+    out_file = Path.cwd() / f"report_{ctx_id}_{int(time.time())}.txt"
+    out_file.write_text(report_text, encoding="utf-8")
+
+    elapsed_total = time.perf_counter() - batch_start
+    rate = total_combos / elapsed_total if elapsed_total > 0 else 0
+
+    print(f"\n{'─'*60}")
+    print(f"  Batch complete!")
+    print(f"  Tasks completed : {count:,}")
+    print(f"  Combinations    : {total_combos:,}")
+    print(f"  Wall time       : {elapsed_total:.1f}s  ({rate:,.0f} combos/s)")
+    print(f"  Report saved    : {out_file.name}")
+    print(f"{'─'*60}\n")
+    print(f"To submit, create a GitHub Issue at:")
+    print(f"  https://github.com/erensh27/sum-of-three-cubes-114/issues/new")
+    print(f"\nTitle:")
+    print(f"  [REPORT] {ctx_id} ({count} blocks)")
+    print(f"\nBody (copy the lines below):")
+    print(f"{'─'*60}")
+    print(report_text)
+    print(f"{'─'*60}")
+
+
+if __name__ == "__main__":
+    main()

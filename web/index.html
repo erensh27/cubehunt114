@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CubeHunt114 — Distributed Search for x³ + y³ + z³ = 114</title>
+  <meta name="description" content="Distributed, browser-based volunteer search for integer representations of 114 as the sum of three cubes using cubic-field norm sieves.">
+  <link rel="stylesheet" href="./styles.css?v=5">
+  <script type="module" src="./app.mjs?v=5"></script>
+</head>
+<body>
+
+  <div class="container">
+
+    <!-- Header Section -->
+    <header>
+      <div class="brand-row">
+        <div class="title-group">
+          <h1>CubeHunt114</h1>
+          <span class="equation">x³ + y³ + z³ = 114</span>
+        </div>
+        <div class="system-status">
+          <div id="status-indicator" class="indicator idle"></div>
+          <span id="status-text">MINING STANDBY</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Compute Control & Configuration Panel -->
+    <section class="panel">
+      <div class="panel-header">
+        <span>Volunteer Compute Node</span>
+        <span>Engine: 114-engine-v1</span>
+      </div>
+
+      <div class="controls-row">
+        <div class="input-group">
+          <label for="input-name">Contributor Alias</label>
+          <input type="text" id="input-name" placeholder="Your name or handle" maxlength="40">
+        </div>
+
+        <div class="input-group">
+          <label for="input-github">GitHub Username (for attribution)</label>
+          <input type="text" id="input-github" placeholder="username" maxlength="40">
+        </div>
+
+        <div class="input-group">
+          <label for="duty-select">Compute Intensity</label>
+          <select id="duty-select">
+            <option value="maximum" selected>100% (Maximum Throughput)</option>
+            <option value="balanced">50% (Balanced Background)</option>
+            <option value="gentle">25% (Gentle / Power Save)</option>
+          </select>
+        </div>
+
+        <div class="btn-group">
+          <button id="btn-toggle" class="primary">Start Mining</button>
+          <button id="btn-submit" disabled>Bank Work ↗</button>
+        </div>
+      </div>
+
+      <div class="sync-status-row">
+        <span id="sync-state">0 blocks mined · ready to mine</span>
+        <span id="session-elapsed">0:00</span>
+      </div>
+
+      <!-- Real-time Local Telemetry Grid -->
+      <div class="metrics-grid" style="margin-top: 14px;">
+        <div class="metric-card">
+          <div class="metric-label">Blocks Mined</div>
+          <div id="stat-blocks-mined" class="metric-value">0</div>
+        </div>
+
+        <div class="metric-card">
+          <div class="metric-label">Session Combinations</div>
+          <div id="stat-session-combos" class="metric-value">0</div>
+        </div>
+
+        <div class="metric-card">
+          <div class="metric-label">Active Channel</div>
+          <div id="stat-context" class="metric-value">—</div>
+        </div>
+
+        <div class="metric-card">
+          <div class="metric-label">Search Rate</div>
+          <div id="stat-rate" class="metric-value">0 combos/s</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Real-time Search Throughput Graph (from math-gambling pulse) -->
+    <section class="panel viz-panel">
+      <div class="panel-header">
+        <span>The Run</span>
+        <span><strong id="stat-graph-rate">—</strong> combos / sec</span>
+      </div>
+      <div id="run-pulse" class="run-pulse">
+        <p class="empty-state">No compute running. Start mining to plot throughput.</p>
+      </div>
+    </section>
+
+    <!-- Single Leaderboard Section -->
+    <section class="panel">
+      <div class="panel-header">
+        <span>Verified Contributors Leaderboard</span>
+        <span>Replay-Checked Ledger</span>
+      </div>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th class="col-rank">Rank</th>
+              <th class="col-name">Contributor</th>
+              <th class="col-blocks">Blocks Mined</th>
+              <th class="col-combos">Combinations Tested</th>
+            </tr>
+          </thead>
+          <tbody id="leaderboard-body">
+            <tr>
+              <td colspan="4" class="empty-state">Loading verified leaderboard...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+  </div>
+
+  <!-- Global Effort Counter (Fixed Bottom Bar) -->
+  <footer class="global-counter-footer">
+    <div class="global-label">Global Search Effort (Worldwide Contributor Pool)</div>
+    <div class="global-number">
+      <span id="global-total-counter">0</span> COMBINATIONS EVALUATED
+    </div>
+  </footer>
+
+  <!-- Submission Modal -->
+  <div id="modal-report" class="modal-overlay hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Bank Mined Blocks</h3>
+        <button id="btn-close-modal" class="btn quiet">✕</button>
+      </div>
+      <div class="modal-body">
+        <p style="color: var(--text-secondary); font-size: 11px;">
+          Banking submits your mined blocks to GitHub. When an issue titled with <code>[REPORT]</code> is opened, GitHub Actions independently replays your tasks to verify SHA-256 digests and credits your account on the leaderboard.
+        </p>
+        <div class="input-group">
+          <label for="report-title">Issue Title</label>
+          <input type="text" id="report-title" readonly spellcheck="false">
+        </div>
+        <div class="input-group">
+          <label for="report-body">Report Payload (JSON &amp; Verification Block)</label>
+          <textarea id="report-body" readonly spellcheck="false"></textarea>
+        </div>
+        <div id="report-copy-status" class="copy-status">
+          1. Copy the report payload below. 2. Open GitHub Issue and paste (Ctrl+V) into the issue description.
+        </div>
+        <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">
+          Target repository: <a href="https://github.com/erensh27/sum-of-three-cubes-114/issues" target="_blank" rel="noopener">github.com/erensh27/sum-of-three-cubes-114</a>
+        </div>
+      </div>
+      <div class="modal-actions" style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
+        <button id="btn-copy-report">1. Copy Report</button>
+        <button id="btn-download-report" class="btn">💾 Download .txt</button>
+        <a id="btn-github-issue" class="btn primary" target="_blank" rel="noopener" href="https://github.com/erensh27/sum-of-three-cubes-114/issues/new?template=report.yml&title=%5BREPORT%5D">2. Open GitHub Issue ↗</a>
+        <button id="btn-clear-bank" class="btn quiet" style="margin-left: auto;">Reset Bank</button>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>

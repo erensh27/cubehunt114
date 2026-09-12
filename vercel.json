@@ -1,0 +1,30 @@
+{
+  "cleanUrls": true,
+  "rewrites": [
+    { "source": "/", "destination": "/web/index.html" },
+    { "source": "/styles.css", "destination": "/web/styles.css" },
+    { "source": "/app.mjs", "destination": "/web/app.mjs" },
+    { "source": "/engine.mjs", "destination": "/web/engine.mjs" },
+    { "source": "/search-worker.mjs", "destination": "/web/search-worker.mjs" },
+    { "source": "/search-session.mjs", "destination": "/web/search-session.mjs" },
+    { "source": "/web/data/(.*)", "destination": "/data/$1" },
+    { "source": "/data/(.*)", "destination": "/data/$1" }
+  ],
+  "headers": [
+    {
+      "source": "/data/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" },
+        { "key": "Access-Control-Allow-Origin", "value": "*" }
+      ]
+    },
+    {
+      "source": "/(.*)\\.(mjs|js|css|html)",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" },
+        { "key": "Pragma", "value": "no-cache" },
+        { "key": "Expires", "value": "0" }
+      ]
+    }
+  ]
+}

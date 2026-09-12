@@ -1,0 +1,113 @@
+name: Process Report
+
+on:
+  issues:
+    types: [opened, edited]
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: process-report-ledger
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    if: startsWith(github.event.issue.title, '[REPORT]') || startsWith(github.event.issue.title, '[report]')
+    runs-on: ubuntu-latest
+    # GitHub-hosted jobs allow up to 360 minutes.  Reports are compact, but
+    # each claimed block must still be independently replayed.
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0   # full history so push never fails due to shallow clone
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Verify submission and replay task
+        id: verifier
+        continue-on-error: true
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_SUBMITTER: ${{ github.event.issue.user.login }}
+        run: |
+          python3 tools/verify_submission.py
+
+      - name: Handle successful verification
+        if: steps.verifier.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          COMMENT_BODY: ${{ steps.verifier.outputs.comment_body }}
+          HAS_SOLUTION: ${{ steps.verifier.outputs.has_solution }}
+        run: |
+          git config user.name "114-bot"
+          git config user.email "bot@project114.internal"
+          git add data/
+          git diff --cached --quiet || git commit -m "verify: record report #${ISSUE_NUMBER}"
+
+          # Pull any commits that landed on main since our checkout (rebase
+          # keeps our commit on top so the push is always a fast-forward).
+          git pull --rebase origin main
+
+          # Immediately recompute leaderboard + stats so the website global
+          # counter updates right after this verification, not 24h later.
+          python3 tools/aggregate_stats.py
+
+          git add data/
+          git diff --cached --quiet || git commit --amend --no-edit
+
+          git push origin main
+
+          # Write comment body to a temp file to avoid shell-expansion issues
+          # with backticks, dollar signs, or newlines inside the variable.
+          COMMENT_FILE="$(mktemp)"
+          printf '%s' "${COMMENT_BODY}" > "${COMMENT_FILE}"
+          gh issue comment "${ISSUE_NUMBER}" --body-file "${COMMENT_FILE}"
+          rm -f "${COMMENT_FILE}"
+
+          # Ensure labels exist before applying them (gh >=2.20 supports
+          # --create-if-missing; fall back to explicit create for older runners).
+          gh label create "verified" --color "0075ca" --description "Digest replay passed" 2>/dev/null || true
+          gh issue edit "${ISSUE_NUMBER}" --add-label "verified"
+          gh issue close "${ISSUE_NUMBER}" --reason "completed"
+
+      - name: Alert on confirmed solution
+        if: steps.verifier.outcome == 'success' && steps.verifier.outputs.has_solution == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SUBMITTER: ${{ github.event.issue.user.login }}
+          ORIGINAL_ISSUE: ${{ github.event.issue.number }}
+        run: |
+          gh issue create \
+            --title "🎉 MATHEMATICAL SOLUTION CONFIRMED: x³ + y³ + z³ = 114" \
+            --body "A valid representation has been independently verified and archived!
+
+          Reported by: @${SUBMITTER}
+          Original report: #${ORIGINAL_ISSUE}
+          Registry: \`data/solutions.json\`" \
+            --label "solution"
+
+      - name: Handle rejected submission
+        if: steps.verifier.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REASON: ${{ steps.verifier.outputs.comment_body }}
+        run: |
+          REJECT_FILE="$(mktemp)"
+          printf '❌ **Submission Rejected**: %s' "${REASON:-Verification failed. Please ensure the digest was not modified and matches the canonical engine.}" > "${REJECT_FILE}"
+          gh issue comment "${ISSUE_NUMBER}" --body-file "${REJECT_FILE}"
+          rm -f "${REJECT_FILE}"
+
+          gh label create "rejected" --color "e4e669" --description "Digest replay failed" 2>/dev/null || true
+          gh issue edit "${ISSUE_NUMBER}" --add-label "rejected"
+          gh issue close "${ISSUE_NUMBER}" --reason "not planned"
