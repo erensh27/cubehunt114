@@ -51,29 +51,24 @@ def fetch_remote_or_local_json(path_rel: str, repo_raw: str | None = None):
     return None
 
 
-def pick_starting_point(verified_set: set, frontiers: dict, ctx_override: str | None):
+def pick_starting_point(frontiers: dict, high_water: dict, ctx_override: str | None):
     """
     Pick a context and starting row that minimises overlap with other concurrent
     contributors.
 
     Strategy:
     - If a context is forced via --context, use it.
-    - Otherwise pick the context with the lowest explored frontier (most virgin
-      territory).
-    - Apply a random session salt so two friends who start at the same time
-      land on different rows within the same context.
+    - Otherwise choose a random context, spreading contributors over all 81.
+    - Start beyond that context's recorded high-water row and use a random
+      block offset so no particular block is always mined first.
     """
     if ctx_override and ctx_override in core.CONTEXT_BY_ID:
         ctx_id = ctx_override
     else:
-        # Prefer the context with the least verified progress
-        ctx_id = min(
-            core.CONTEXT_BY_ID.keys(),
-            key=lambda c: frontiers.get(c, 0),
-        )
+        ctx_id = random.choice(list(core.CONTEXT_BY_ID))
 
     c = core.CONTEXT_BY_ID[ctx_id]
-    base_row = frontiers.get(ctx_id, 0)
+    base_row = high_water.get(ctx_id, frontiers.get(ctx_id, 0))
 
     # Salt: jump ahead by a random multiple of ROWS_PER_TASK so concurrent
     # runners in the same context land on different rows.
@@ -84,17 +79,6 @@ def pick_starting_point(verified_set: set, frontiers: dict, ctx_override: str | 
     total_rows = int(c["totalRows"])
     if start_row >= total_rows:
         start_row = 0
-
-    # Skip over any rows already in the verified set
-    attempts = 0
-    while attempts < 1000:
-        task = core.make_task(ctx_id, str(start_row), 0)
-        if core.task_id(task) not in verified_set:
-            break
-        start_row += core.ROWS_PER_TASK
-        if start_row >= total_rows:
-            start_row = 0
-        attempts += 1
 
     return ctx_id, start_row
 
@@ -133,13 +117,12 @@ Examples:
 
     print("Fetching live verified-task ledger from GitHub…", flush=True)
     blocks    = fetch_remote_or_local_json("data/blocks.json",    args.repo_raw) or {"frontiers": {}}
-    completed = fetch_remote_or_local_json("data/completed.json", args.repo_raw) or {"tasks": []}
-    verified_set = set(completed.get("tasks", []))
     frontiers    = blocks.get("frontiers", {})
+    high_water   = blocks.get("high_water_marks", {})
 
-    print(f"Ledger loaded: {len(verified_set)} tasks already verified globally.", flush=True)
+    print("Public high-water marks loaded; exact duplicate protection is server-side.", flush=True)
 
-    ctx_id, start_row = pick_starting_point(verified_set, frontiers, args.context)
+    ctx_id, start_row = pick_starting_point(frontiers, high_water, args.context)
     c = core.CONTEXT_BY_ID[ctx_id]
 
     print(f"\nContributor : {args.name} (@{args.github or 'anonymous'})")
@@ -159,15 +142,14 @@ Examples:
             current_row = 0  # wrap around
 
         # Iterate all blocks for this row, not just block 0
-        for block in range(c["blocks"]):
+        block_start = random.randrange(c["blocks"])
+        for block_offset in range(c["blocks"]):
             if tasks_done >= args.tasks:
                 break
 
+            block = (block_start + block_offset) % c["blocks"]
             task = core.make_task(ctx_id, str(current_row), block)
             tid  = core.task_id(task)
-
-            if tid in verified_set:
-                continue  # skip already-verified task
 
             label = f"[{tasks_done + 1}/{args.tasks}] {ctx_id} row={current_row} blk={block}"
             print(f"{label}…", end="", flush=True)
@@ -181,7 +163,6 @@ Examples:
                 + result["counters"]["quotient_points"]
             )
             total_combos += combos
-            verified_set.add(tid)
 
             print(
                 f" {elapsed:.2f}s  {combos:,} combos  digest={result['digest'][:16]}…",

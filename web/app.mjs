@@ -383,7 +383,7 @@ class App {
     }
 
     // If remote state hasn't loaded yet, wait for it before dispatching tasks
-    // so we don't duplicate work already recorded in completed.json
+    // so we don't duplicate work already recorded in this browser session
     if (!this._stateLoaded) {
       this._pendingStart = true;
       return;

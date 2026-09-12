@@ -18,8 +18,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 
 import search_core as core
+import ledger
 
 MAX_BODY_BYTES = 65536
+# A compact range line fits millions of task claims inside a GitHub issue, but
+# every task is independently replayed.  This ceiling is intentionally high;
+# the Actions six-hour job limit is the practical upper bound.
+MAX_TASKS_LIMIT = 5_000_000
 
 
 def now_iso():
@@ -38,7 +43,7 @@ def parse_report_body(body_text: str) -> dict:
         contributor = "Anonymous"
         github = ""
         solution = None
-        tasks = []
+        ranges = []
         claimed_combos = 0
 
         for line in content.strip().splitlines():
@@ -67,21 +72,15 @@ def parse_report_body(body_text: str) -> dict:
                     row = int(row_s)
                     blk = int(blk_s)
                     count = int(count_s or 1)
-                    count = min(count, 50000)
-                    for i in range(count):
-                        t = core.make_task(ctx, str(row), blk)
-                        d = digest if (i == count - 1 or count == 1) else None
-                        tasks.append({"task": t, "digest": d, "solution": solution if i == count - 1 else None})
-                        blk += 1
-                        if blk >= c["blocks"]:
-                            blk = 0
-                            row = (row + core.ROWS_PER_TASK) % int(c["totalRows"])
+                    if count > MAX_TASKS_LIMIT:
+                        raise ValueError(f"Range exceeds maximum of {MAX_TASKS_LIMIT:,} tasks")
+                    ranges.append((ctx, row, blk, count, digest, solution))
 
-        if tasks:
+        if ranges:
             return {
                 "schema": "114-report-v2",
                 "contributor": {"name": contributor, "github": github},
-                "tasks": tasks,
+                "ranges": ranges,
                 "claimed_combinations": claimed_combos,
                 "solution": solution,
             }
@@ -157,15 +156,37 @@ def parse_report_body(body_text: str) -> dict:
     raise ValueError("Could not find a valid report block (<!-- 114v2 -->, <!-- 114-report-v1 -->, or ```json) in issue body")
 
 
+def iter_report_tasks(report_data: dict):
+    """Yield compact v2 ranges lazily, avoiding a multi-million-item list."""
+    if "tasks" in report_data:
+        yield from report_data["tasks"]
+        return
+    for ctx, row, blk, count, digest, solution in report_data.get("ranges", []):
+        c = core.CONTEXT_BY_ID[ctx]
+        for i in range(count):
+            yield {
+                "task": core.make_task(ctx, str(row), blk),
+                "digest": digest if i == count - 1 else None,
+                "solution": solution if i == count - 1 else None,
+            }
+            blk += 1
+            if blk >= c["blocks"]:
+                blk = 0
+                row = (row + core.ROWS_PER_TASK) % int(c["totalRows"])
+
+
+def report_task_count(report_data: dict) -> int:
+    if "tasks" in report_data:
+        return len(report_data["tasks"])
+    return sum(item[3] for item in report_data.get("ranges", []))
+
+
 def verify_and_apply(report_data: dict, submitter_login: str) -> dict:
-    completed_path = ROOT / "data/completed.json"
     blocks_path = ROOT / "data/blocks.json"
     leaderboard_path = ROOT / "data/leaderboard.json"
     stats_path = ROOT / "data/stats.json"
     solutions_path = ROOT / "data/solutions.json"
 
-    with open(completed_path, "r", encoding="utf-8") as f:
-        completed_data = json.load(f)
     with open(blocks_path, "r", encoding="utf-8") as f:
         blocks_data = json.load(f)
     with open(leaderboard_path, "r", encoding="utf-8") as f:
@@ -175,26 +196,38 @@ def verify_and_apply(report_data: dict, submitter_login: str) -> dict:
     with open(solutions_path, "r", encoding="utf-8") as f:
         solutions_data = json.load(f)
 
-    verified_set = set(completed_data.get("tasks", []))
+    # Only open the context shards present in this report.  The old monolithic
+    # file made each issue process tens of megabytes of unrelated IDs.
+    report_contexts = (
+        {item[0] for item in report_data.get("ranges", [])}
+        if "ranges" in report_data
+        else {
+            item.get("task", {}).get("context")
+            for item in report_data.get("tasks", [])
+            if isinstance(item.get("task"), dict) and item["task"].get("context") in core.CONTEXT_BY_ID
+        }
+    )
+    verified_by_context = {ctx: set(ledger.load_context(ctx).get("tasks", [])) for ctx in report_contexts}
     contributor_claim = report_data.get("contributor", {})
     name = (contributor_claim.get("name") or submitter_login or "Anonymous").strip()[:64]
     gh_handle = (contributor_claim.get("github") or submitter_login or "").strip()[:64]
 
-    tasks_to_verify = report_data.get("tasks", [])
-    if not tasks_to_verify:
+    task_count = report_task_count(report_data)
+    if not task_count:
         raise ValueError("Report contains no tasks")
-    MAX_TASKS_LIMIT = 50000
-    if len(tasks_to_verify) > MAX_TASKS_LIMIT:
+    if task_count > MAX_TASKS_LIMIT:
         raise ValueError(f"Report exceeds maximum task limit of {MAX_TASKS_LIMIT}")
 
-    accepted_tasks = []
+    accepted_count = 0
     duplicate_tasks = []
+    duplicate_count = 0
     failed_tasks = []
+    failed_count = 0
     found_solutions = []
     total_new_combinations = 0
     best_delta_in_report = None
 
-    for item in tasks_to_verify:
+    for item in iter_report_tasks(report_data):
         task_def = item.get("task")
         claimed_digest = item.get("digest")
 
@@ -202,28 +235,37 @@ def verify_and_apply(report_data: dict, submitter_login: str) -> dict:
             validated_task = core.validate_task(task_def)
             tid = core.task_id(validated_task)
         except Exception as e:
-            failed_tasks.append((str(task_def), f"Validation error: {e}"))
+            failed_count += 1
+            if len(failed_tasks) < 100:
+                failed_tasks.append((str(task_def), f"Validation error: {e}"))
             continue
 
-        if tid in verified_set:
-            duplicate_tasks.append(tid)
+        context_verified = verified_by_context.setdefault(validated_task["context"], set())
+        if tid in context_verified:
+            duplicate_count += 1
+            if len(duplicate_tasks) < 100:
+                duplicate_tasks.append(tid)
             continue
 
         # Replay the task independently
         try:
             replay_result = core.run_task(validated_task)
         except Exception as e:
-            failed_tasks.append((tid, f"Replay error: {e}"))
+            failed_count += 1
+            if len(failed_tasks) < 100:
+                failed_tasks.append((tid, f"Replay error: {e}"))
             continue
 
         computed_digest = replay_result["digest"]
         if claimed_digest and claimed_digest != computed_digest:
-            failed_tasks.append((tid, f"Digest mismatch: claimed {claimed_digest}, got {computed_digest}"))
+            failed_count += 1
+            if len(failed_tasks) < 100:
+                failed_tasks.append((tid, f"Digest mismatch: claimed {claimed_digest}, got {computed_digest}"))
             continue
 
         # Replay matched!
-        verified_set.add(tid)
-        accepted_tasks.append(tid)
+        context_verified.add(tid)
+        accepted_count += 1
 
         # Advance frontier if row aligns with current frontier
         ctx = validated_task["context"]
@@ -231,6 +273,9 @@ def verify_and_apply(report_data: dict, submitter_login: str) -> dict:
         current_frontier = blocks_data["frontiers"].get(ctx, 0)
         if r == current_frontier:
             blocks_data["frontiers"][ctx] = r + core.ROWS_PER_TASK
+        blocks_data.setdefault("high_water_marks", {})[ctx] = max(
+            blocks_data.get("high_water_marks", {}).get(ctx, 0), r + core.ROWS_PER_TASK
+        )
 
         combos = replay_result["counters"].get("generators", 0) + replay_result["counters"].get("quotient_points", 0)
         total_new_combinations += combos
@@ -248,29 +293,29 @@ def verify_and_apply(report_data: dict, submitter_login: str) -> dict:
             if len(coords) == 3 and core.verify_triple(coords, 114):
                 found_solutions.append(coords)
 
-    if not accepted_tasks and duplicate_tasks:
+    if not accepted_count and duplicate_count:
         return {
             "success": False,
-            "reason": f"All {len(duplicate_tasks)} submitted tasks were already completed by another contributor.",
+            "reason": f"All {duplicate_count} submitted tasks were already completed by another contributor.",
             "duplicates": duplicate_tasks,
         }
 
-    if not accepted_tasks and failed_tasks:
+    if not accepted_count and failed_count:
         return {
             "success": False,
             "reason": f"Verification failed on submitted tasks: {failed_tasks[:3]}",
             "failed": failed_tasks,
         }
 
-    # Update completed database
-    completed_data["tasks"] = sorted(verified_set)
-    completed_data["verified_count"] = len(completed_data["tasks"])
-    completed_data["updated"] = now_iso()
+    timestamp = now_iso()
+    for ctx, task_ids in verified_by_context.items():
+        ledger.save_context(ctx, task_ids, timestamp)
+    total_verified = sum(ledger.load_context(ctx).get("verified_count", 0) for ctx in core.CONTEXT_BY_ID)
 
     # Update stats
     stats_data["total_combinations"] = stats_data.get("total_combinations", 0) + total_new_combinations
-    stats_data["total_verified_tasks"] = len(completed_data["tasks"])
-    stats_data["updated"] = now_iso()
+    stats_data["total_verified_tasks"] = total_verified
+    stats_data["updated"] = timestamp
 
     # Update leaderboard
     contributors = leaderboard_data.setdefault("contributors", [])
@@ -286,13 +331,13 @@ def verify_and_apply(report_data: dict, submitter_login: str) -> dict:
         }
         contributors.append(entry)
 
-    entry["verified_tasks"] += len(accepted_tasks)
+    entry["verified_tasks"] += accepted_count
     entry["combinations"] += total_new_combinations
     entry["last_active"] = now_iso()
 
     leaderboard_data["total_combinations"] = stats_data["total_combinations"]
-    leaderboard_data["total_verified_tasks"] = stats_data["total_verified_tasks"]
-    leaderboard_data["updated"] = now_iso()
+    leaderboard_data["total_verified_tasks"] = total_verified
+    leaderboard_data["updated"] = timestamp
     # Sort leaderboard by verified_tasks descending
     leaderboard_data["contributors"] = sorted(
         contributors,
@@ -313,9 +358,11 @@ def verify_and_apply(report_data: dict, submitter_login: str) -> dict:
         if not any(s.get("x") == sol_entry["x"] and s.get("y") == sol_entry["y"] and s.get("z") == sol_entry["z"] for s in solutions_data.get("solutions", [])):
             solutions_data.setdefault("solutions", []).append(sol_entry)
 
-    # Save state files atomically
-    with open(completed_path, "w", encoding="utf-8") as f:
-        json.dump(completed_data, f, indent=2)
+    # Save public coordination and attribution state.  Task IDs are saved in
+    # context shards above and are never downloaded by normal clients.
+    # This is written in the same accepted-report transaction as the shard, so
+    # every verified mining batch immediately publishes fresh scheduling data.
+    blocks_data["updated"] = timestamp
     with open(blocks_path, "w", encoding="utf-8") as f:
         json.dump(blocks_data, f, indent=2)
     with open(leaderboard_path, "w", encoding="utf-8") as f:
@@ -327,13 +374,12 @@ def verify_and_apply(report_data: dict, submitter_login: str) -> dict:
 
     return {
         "success": True,
-        "accepted_count": len(accepted_tasks),
-        "duplicate_count": len(duplicate_tasks),
+        "accepted_count": accepted_count,
+        "duplicate_count": duplicate_count,
         "total_new_combinations": total_new_combinations,
-        "accepted_tasks": accepted_tasks,
         "found_solutions": found_solutions,
         "contributor": name,
-        "total_verified": len(completed_data["tasks"])
+        "total_verified": total_verified
     }
 
 

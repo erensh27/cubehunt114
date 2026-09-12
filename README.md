@@ -59,7 +59,7 @@ cd sum-of-three-cubes-114
 # Run a 32-task batch (auto-picks the least-explored context):
 python3 tools/runner.py --name "YourName" --github "yourhandle" --tasks 32
 ```
-The runner automatically fetches the live verified-task ledger from GitHub so it never duplicates work already claimed by another contributor.
+The runner downloads only the small public high-water-mark file from GitHub. Exact duplicate checks happen during server-side verification against per-context ledgers.
 
 ### Running With Friends Simultaneously
 
@@ -81,8 +81,10 @@ After each batch, submit a GitHub Issue titled `[REPORT] <context> (<N> tasks)` 
 ## Zero-Duplicate Progress Architecture
 
 To ensure no two contributors mine the same search space:
-- **Prior Knowledge Ingestion**: On load, every web and CLI client downloads `data/completed.json` and `data/blocks.json`. All already verified tasks are loaded into memory and permanently skipped.
-- **81 Parallel Channels**: The search space is partitioned across 81 distinct cubic contexts (`c00` to `c80`). Clients are automatically assigned to channels with the lowest explored frontier.
+- **Lightweight coordination**: Web and CLI clients download only `data/blocks.json`, which contains contiguous frontiers and high-water marks. They never download the growing completed-task ledger.
+- **Sharded verification ledger**: Exact completed IDs are retained server-side as `data/completed/c00.json` through `c80.json`, so duplicate reports are still rejected without imposing a browser download.
+- **81 Parallel Channels**: The search space is partitioned across 81 distinct cubic contexts (`c00` to `c80`). Clients choose a randomized context, row offset, and starting block so progress spreads across the full search space.
+- **Immediate scheduling updates**: Every accepted GitHub report writes the relevant context shard and refreshes `data/blocks.json` (frontier, high-water mark, and timestamp) in the same commit.
 - **Session Salting**: If multiple contributors access the same context concurrently, a session salt staggers their starting lattice rows, preventing race collisions.
 - **Atomic Replay & Deduplication**: GitHub Actions checks every incoming task against the verified ledger. If a task was already claimed by another contributor, it is flagged as duplicate and safely skipped.
 
@@ -94,7 +96,7 @@ To ensure no two contributors mine the same search space:
    - Triggers `.github/workflows/process-report.yml`.
    - Parses the report block and replays the task from scratch using canonical Python `search_core.py`.
    - Verifies the SHA-256 digest and checks for duplicates.
-   - If valid, commits the verified tasks to `data/completed.json`, credits the contributor, and closes the issue with a verification checkmark.
+   - If valid, commits verified IDs only to their context shard in `data/completed/`, updates the public high-water mark, credits the contributor, and closes the issue with a verification checkmark.
    - If an exact solution is discovered, an official solution record is created in `data/solutions.json` and a milestone issue is published.
 2. **Every 24 Hours (`daily-aggregate.yml`)**:
    - Triggers `.github/workflows/daily-aggregate.yml` via cron (`0 0 * * *`).

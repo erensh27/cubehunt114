@@ -1,18 +1,21 @@
 /* Session manager and task distributor for 114 distributed search.
- * Loads verified completed data to prevent duplicate computation and
- * assigns contiguous lattice blocks across the 81 cubic contexts.
+ * Loads small public high-water marks and distributes workers across all 81
+ * contexts. Exact completed IDs remain in server-side context shards.
  */
 
 import { CONTEXTS, makeTask, taskId, ROWS_PER_TASK } from './engine.mjs';
 
 export class SearchSession {
   // Max tasks per report batch (for verification safety in GitHub Actions)
-  static MAX_TASKS_PER_REPORT = 25000;
+  static MAX_TASKS_PER_REPORT = 5000000;
 
   constructor(baseUrl = './') {
     this.baseUrl = baseUrl.endsWith('/') ? baseUrl : baseUrl + '/';
+    // Local-only deduplication protects a browser session/reload. Remote
+    // duplicate protection is deliberately kept in the server-side shards.
     this.completedTasks = new Set();
     this.frontiers = {};
+    this.highWaterMarks = {};
     this.activeContext = 'c00';
     this.currentRow = '0';
     this.currentBlock = 0;
@@ -75,15 +78,6 @@ export class SearchSession {
     }
   }
 
-  isRowCompleted(context, row) {
-    try {
-      const tid = taskId(makeTask(context, String(row), 0));
-      return this.completedTasks.has(tid);
-    } catch {
-      return false;
-    }
-  }
-
   async loadInitialData() {
     const tryFetch = async filename => {
       const paths = [
@@ -102,55 +96,35 @@ export class SearchSession {
     };
 
     try {
-      const [completedData, blocksData] = await Promise.all([
-        tryFetch('completed.json'),
-        tryFetch('blocks.json')
-      ]);
-
-      if (completedData && Array.isArray(completedData.tasks)) {
-        this.completedTasks = new Set(completedData.tasks);
-      }
+      const blocksData = await tryFetch('blocks.json');
 
       if (blocksData && blocksData.frontiers) {
         this.frontiers = blocksData.frontiers;
+        this.highWaterMarks = blocksData.high_water_marks || {};
       }
     } catch (err) {
       console.warn('Notice: Could not load remote state files, falling back to local session state:', err);
     }
 
-    // Select initial context: find context with lowest current frontier
-    let bestCtx = 'c00';
-    let minFrontier = Infinity;
-
-    for (const ctx of CONTEXTS) {
-      const f = this.frontiers[ctx.id] || 0;
-      if (f < minFrontier) {
-        minFrontier = f;
-        bestCtx = ctx.id;
-      }
-    }
-
+    // Randomized context and block starts spread simultaneous visitors over
+    // the whole search space instead of repeatedly filling c01/c02 first.
+    const seed = parseInt(this.sessionId, 36) || 0;
+    const bestCtx = CONTEXTS[seed % CONTEXTS.length].id;
     this.activeContext = bestCtx;
-    // Session salt to stagger concurrent workers in the same context
-    const saltOffset = (parseInt(this.sessionId, 36) % 8) * ROWS_PER_TASK;
-    let candidateRow = (this.frontiers[bestCtx] || 0) + saltOffset;
-
-    let attempts = 0;
-    while (this.isRowCompleted(bestCtx, candidateRow) && attempts++ < 500) {
-      candidateRow += ROWS_PER_TASK;
-    }
+    const saltOffset = ((seed >>> 7) % 1024) * ROWS_PER_TASK;
+    let candidateRow = (this.highWaterMarks[bestCtx] || this.frontiers[bestCtx] || 0) + saltOffset;
 
     const activeCtxObj = CONTEXTS.find(c => c.id === bestCtx) || CONTEXTS[0];
     if (BigInt(candidateRow) >= BigInt(activeCtxObj.totalRows)) {
       candidateRow = 0;
     }
     this.currentRow = String(candidateRow);
-    this.currentBlock = 0;
+    this.currentBlock = (seed >>> 17) % activeCtxObj.blocks;
 
     return {
       context: this.activeContext,
       startRow: this.currentRow,
-      verifiedCount: this.completedTasks.size,
+      verifiedCount: 0,
     };
   }
 
@@ -179,16 +153,14 @@ export class SearchSession {
       this.currentRow = r.toString();
       this.currentBlock = b;
 
-      if (!this.completedTasks.has(tid)) {
-        return candidate;
-      }
+      return candidate;
     }
 
     // Advance to next context if this context is heavily covered
     const nextIdx = (CONTEXTS.findIndex(x => x.id === this.activeContext) + 1) % CONTEXTS.length;
     this.activeContext = CONTEXTS[nextIdx].id;
-    this.currentRow = String(this.frontiers[this.activeContext] || 0);
-    this.currentBlock = 0;
+    this.currentRow = String(this.highWaterMarks[this.activeContext] || this.frontiers[this.activeContext] || 0);
+    this.currentBlock = Math.floor(Math.random() * (CONTEXTS.find(c => c.id === this.activeContext)?.blocks || 1));
     return makeTask(this.activeContext, this.currentRow, 0);
   }
 
@@ -211,7 +183,7 @@ export class SearchSession {
     // A worker can finish just after a pause/restart transition.  Never add
     // the same completed task twice: apart from inflating the block counter,
     // a duplicate here makes the compact range report invalid.
-    if (this.completedTasks.has(tid)) {
+    if (this.completedTasks?.has(tid)) {
       return {
         taskId: tid,
         combinations: 0,
@@ -220,7 +192,6 @@ export class SearchSession {
         duplicate: true,
       };
     }
-    this.completedTasks.add(tid);
 
     const combos =
       (result.counters.generators || 0) + (result.counters.quotient_points || 0);

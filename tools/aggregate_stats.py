@@ -16,12 +16,10 @@ def now_iso():
 
 
 def main():
-    completed_path   = ROOT / "data/completed.json"
     leaderboard_path = ROOT / "data/leaderboard.json"
     stats_path       = ROOT / "data/stats.json"
     blocks_path      = ROOT / "data/blocks.json"
 
-    with open(completed_path,   "r", encoding="utf-8") as f: completed   = json.load(f)
     with open(leaderboard_path, "r", encoding="utf-8") as f: leaderboard = json.load(f)
     with open(stats_path,       "r", encoding="utf-8") as f: stats       = json.load(f)
     with open(blocks_path,      "r", encoding="utf-8") as f: blocks      = json.load(f)
@@ -35,7 +33,11 @@ def main():
     )
     leaderboard["contributors"] = contributors
 
-    total_tasks  = len(completed.get("tasks", []))
+    completed_dir = ROOT / "data" / "completed"
+    total_tasks = 0
+    for path in completed_dir.glob("c??.json"):
+        with path.open(encoding="utf-8") as f:
+            total_tasks += int(json.load(f).get("verified_count", 0))
     # Always recompute as authoritative sum – this self-heals any drift
     # between individual verify runs and the running total.
     total_combos = sum(c.get("combinations", 0) for c in contributors)
