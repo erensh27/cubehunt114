@@ -37,28 +37,28 @@ def main():
     leaderboard["contributors"] = contributors
 
     counts_by_ctx = ledger.verified_counts_by_context()
-    total_tasks = sum(counts_by_ctx.values())
-    # Always recompute as authoritative sum – this self-heals any drift
-    # between individual verify runs and the running total.
     total_combos = sum(c.get("combinations", 0) for c in contributors)
 
     import search_core as core
     all_contexts = sorted(list(core.CONTEXT_BY_ID.keys()))
-    total_blocks_by_ctx = {}
-    total_combos_by_ctx = {}
-    for cid in all_contexts:
-        cnt = counts_by_ctx.get(cid, 0)
-        total_blocks_by_ctx[cid] = cnt
-        c_info = core.CONTEXT_BY_ID[cid]
-        band = c_info.get("band", 0)
-        total_combos_by_ctx[cid] = cnt * 2048 if band == 0 else cnt * 43256
 
-    blocks["total_blocks"] = total_blocks_by_ctx
-    blocks["total_combinations"] = total_combos_by_ctx
+    if counts_by_ctx:
+        total_tasks = sum(counts_by_ctx.values())
+        total_blocks_by_ctx = {}
+        total_combos_by_ctx = {}
+        for cid in all_contexts:
+            cnt = counts_by_ctx.get(cid, 0)
+            total_blocks_by_ctx[cid] = cnt
+            c_info = core.CONTEXT_BY_ID[cid]
+            band = c_info.get("band", 0)
+            total_combos_by_ctx[cid] = cnt * 2048 if band == 0 else cnt * 43256
+
+        blocks["total_blocks"] = total_blocks_by_ctx
+        blocks["total_combinations"] = total_combos_by_ctx
+        stats["total_verified_tasks"] = total_tasks
+
     blocks["updated"] = now_iso()
-
     stats["total_combinations"]  = total_combos
-    stats["total_verified_tasks"] = total_tasks
     stats["active_contexts"]     = len(blocks.get("frontiers", {}))
     stats["updated"]             = blocks["updated"]
 
