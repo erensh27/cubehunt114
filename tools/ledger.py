@@ -79,5 +79,11 @@ def total_verified_count() -> int:
     total = 0
     for path in LEDGER_DIR.glob("c??/*-*.json"):
         with path.open(encoding="utf-8") as f:
-            total += int(json.load(f).get("verified_count", 0))
+            for _ in range(15):
+                line = f.readline()
+                if not line:
+                    break
+                if "verified_count" in line:
+                    total += int(line.split(":", 1)[1].strip().rstrip(","))
+                    break
     return total
