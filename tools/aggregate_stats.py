@@ -5,10 +5,13 @@ Executed by GitHub Actions schedule (every 24 hours) or workflow_dispatch.
 Ensures consistency across data files and recalculates rankings.
 """
 import json
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools"))
+import ledger
 
 
 def now_iso():
@@ -33,11 +36,7 @@ def main():
     )
     leaderboard["contributors"] = contributors
 
-    completed_dir = ROOT / "data" / "completed"
-    total_tasks = 0
-    for path in completed_dir.glob("c??.json"):
-        with path.open(encoding="utf-8") as f:
-            total_tasks += int(json.load(f).get("verified_count", 0))
+    total_tasks = ledger.total_verified_count()
     # Always recompute as authoritative sum – this self-heals any drift
     # between individual verify runs and the running total.
     total_combos = sum(c.get("combinations", 0) for c in contributors)

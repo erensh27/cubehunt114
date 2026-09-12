@@ -82,7 +82,7 @@ After each batch, submit a GitHub Issue titled `[REPORT] <context> (<N> tasks)` 
 
 To ensure no two contributors mine the same search space:
 - **Lightweight coordination**: Web and CLI clients download only `data/blocks.json`, which contains contiguous frontiers and high-water marks. They never download the growing completed-task ledger.
-- **Sharded verification ledger**: Exact completed IDs are retained server-side as `data/completed/c00.json` through `c80.json`, so duplicate reports are still rejected without imposing a browser download.
+- **Bounded verification ledger**: Exact completed IDs are retained server-side in hash-routed parts such as `data/completed/c00/af-000001.json`. A part rolls over before 80 MiB, safely below GitHub's 100 MiB hard limit, and verification loads only the matching bucket.
 - **81 Parallel Channels**: The search space is partitioned across 81 distinct cubic contexts (`c00` to `c80`). Clients choose a randomized context, row offset, and starting block so progress spreads across the full search space.
 - **Immediate scheduling updates**: Every accepted GitHub report writes the relevant context shard and refreshes `data/blocks.json` (frontier, high-water mark, and timestamp) in the same commit.
 - **Session Salting**: If multiple contributors access the same context concurrently, a session salt staggers their starting lattice rows, preventing race collisions.

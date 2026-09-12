@@ -196,18 +196,9 @@ def verify_and_apply(report_data: dict, submitter_login: str) -> dict:
     with open(solutions_path, "r", encoding="utf-8") as f:
         solutions_data = json.load(f)
 
-    # Only open the context shards present in this report.  The old monolithic
-    # file made each issue process tens of megabytes of unrelated IDs.
-    report_contexts = (
-        {item[0] for item in report_data.get("ranges", [])}
-        if "ranges" in report_data
-        else {
-            item.get("task", {}).get("context")
-            for item in report_data.get("tasks", [])
-            if isinstance(item.get("task"), dict) and item["task"].get("context") in core.CONTEXT_BY_ID
-        }
-    )
-    verified_by_context = {ctx: set(ledger.load_context(ctx).get("tasks", [])) for ctx in report_contexts}
+    # Load only the hash bucket that owns each validated task. A growing
+    # context can never force an entire context ledger into memory.
+    verified_by_bucket = {}
     contributor_claim = report_data.get("contributor", {})
     name = (contributor_claim.get("name") or submitter_login or "Anonymous").strip()[:64]
     gh_handle = (contributor_claim.get("github") or submitter_login or "").strip()[:64]
@@ -240,7 +231,11 @@ def verify_and_apply(report_data: dict, submitter_login: str) -> dict:
                 failed_tasks.append((str(task_def), f"Validation error: {e}"))
             continue
 
-        context_verified = verified_by_context.setdefault(validated_task["context"], set())
+        ctx = validated_task["context"]
+        bucket = ledger.bucket_for(tid)
+        context_verified = verified_by_bucket.setdefault(
+            (ctx, bucket), ledger.load_bucket(ctx, bucket)
+        )
         if tid in context_verified:
             duplicate_count += 1
             if len(duplicate_tasks) < 100:
@@ -268,7 +263,6 @@ def verify_and_apply(report_data: dict, submitter_login: str) -> dict:
         accepted_count += 1
 
         # Advance frontier if row aligns with current frontier
-        ctx = validated_task["context"]
         r = int(validated_task["row"])
         current_frontier = blocks_data["frontiers"].get(ctx, 0)
         if r == current_frontier:
@@ -308,9 +302,9 @@ def verify_and_apply(report_data: dict, submitter_login: str) -> dict:
         }
 
     timestamp = now_iso()
-    for ctx, task_ids in verified_by_context.items():
-        ledger.save_context(ctx, task_ids, timestamp)
-    total_verified = sum(ledger.load_context(ctx).get("verified_count", 0) for ctx in core.CONTEXT_BY_ID)
+    for (ctx, bucket), task_ids in verified_by_bucket.items():
+        ledger.save_bucket(ctx, bucket, task_ids, timestamp)
+    total_verified = ledger.total_verified_count()
 
     # Update stats
     stats_data["total_combinations"] = stats_data.get("total_combinations", 0) + total_new_combinations
