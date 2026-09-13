@@ -1,0 +1,10 @@
+# Exclude raw ledger and offline verification files from Vercel deployment
+data/completed/
+data/completed/**
+**/completed/**
+tests/
+tools/
+reports/
+.github/
+*.md
+LICENSE

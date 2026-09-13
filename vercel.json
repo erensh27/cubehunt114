@@ -1,0 +1,29 @@
+{
+  "buildCommand": "echo 'Static build ready'",
+  "outputDirectory": ".",
+  "cleanUrls": false,
+  "ignoreCommand": "bash -c 'if [ \"$VERCEL_GIT_COMMIT_REF\" = \"data-archive\" ]; then exit 0; else exit 1; fi'",
+  "rewrites": [
+    { "source": "/web/data/(.*)", "destination": "/data/$1" },
+    { "source": "/web/(.*)", "destination": "/$1" },
+    { "source": "/web", "destination": "/index.html" },
+    { "source": "/", "destination": "/index.html" }
+  ],
+  "headers": [
+    {
+      "source": "/data/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" },
+        { "key": "Access-Control-Allow-Origin", "value": "*" }
+      ]
+    },
+    {
+      "source": "/(.*)\\.(mjs|js|css|html)",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" },
+        { "key": "Pragma", "value": "no-cache" },
+        { "key": "Expires", "value": "0" }
+      ]
+    }
+  ]
+}
