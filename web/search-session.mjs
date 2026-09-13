@@ -79,11 +79,11 @@ export class SearchSession {
   async loadInitialData() {
     const tryFetch = async filename => {
       const paths = [
-        `https://raw.githubusercontent.com/erensh27/cubehunt114/main/data/${filename}`,
-        `./data/${filename}`,
         `/data/${filename}`,
+        `./data/${filename}`,
         `../data/${filename}`,
-        `data/${filename}`
+        `data/${filename}`,
+        `https://raw.githubusercontent.com/erensh27/cubehunt114/main/data/${filename}`
       ];
       for (const p of paths) {
         try {

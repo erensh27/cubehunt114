@@ -11,8 +11,6 @@ export class SearchSession {
 
   constructor(baseUrl = './') {
     this.baseUrl = baseUrl.endsWith('/') ? baseUrl : baseUrl + '/';
-    // Local-only deduplication protects a browser session/reload. Remote
-    // duplicate protection is deliberately kept in the server-side shards.
     this.completedTasks = new Set();
     this.frontiers = {};
     this.highWaterMarks = {};
@@ -81,11 +79,11 @@ export class SearchSession {
   async loadInitialData() {
     const tryFetch = async filename => {
       const paths = [
-        `https://raw.githubusercontent.com/erensh27/cubehunt114/main/data/${filename}`,
-        `./data/${filename}`,
         `/data/${filename}`,
+        `./data/${filename}`,
         `../data/${filename}`,
-        `data/${filename}`
+        `data/${filename}`,
+        `https://raw.githubusercontent.com/erensh27/cubehunt114/main/data/${filename}`
       ];
       for (const p of paths) {
         try {
@@ -154,7 +152,7 @@ export class SearchSession {
       this.currentRow = r.toString();
       this.currentBlock = b;
 
-      return candidate;
+      if (!this.completedTasks.has(tid)) return candidate;
     }
 
     // Advance to next context if this context is heavily covered
@@ -184,7 +182,7 @@ export class SearchSession {
     // A worker can finish just after a pause/restart transition.  Never add
     // the same completed task twice: apart from inflating the block counter,
     // a duplicate here makes the compact range report invalid.
-    if (this.completedTasks?.has(tid)) {
+    if (this.completedTasks.has(tid)) {
       return {
         taskId: tid,
         combinations: 0,
@@ -193,6 +191,7 @@ export class SearchSession {
         duplicate: true,
       };
     }
+    this.completedTasks.add(tid);
 
     const combos =
       (result.counters.generators || 0) + (result.counters.quotient_points || 0);

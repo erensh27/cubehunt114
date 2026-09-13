@@ -1,14 +1,12 @@
 {
-  "cleanUrls": true,
+  "buildCommand": "echo 'Static build ready'",
+  "outputDirectory": ".",
+  "cleanUrls": false,
   "rewrites": [
-    { "source": "/", "destination": "/web/index.html" },
-    { "source": "/styles.css", "destination": "/web/styles.css" },
-    { "source": "/app.mjs", "destination": "/web/app.mjs" },
-    { "source": "/engine.mjs", "destination": "/web/engine.mjs" },
-    { "source": "/search-worker.mjs", "destination": "/web/search-worker.mjs" },
-    { "source": "/search-session.mjs", "destination": "/web/search-session.mjs" },
     { "source": "/web/data/(.*)", "destination": "/data/$1" },
-    { "source": "/data/(.*)", "destination": "/data/$1" }
+    { "source": "/web/(.*)", "destination": "/$1" },
+    { "source": "/web", "destination": "/index.html" },
+    { "source": "/", "destination": "/index.html" }
   ],
   "headers": [
     {

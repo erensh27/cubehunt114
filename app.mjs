@@ -7,7 +7,7 @@ import { runTask, verifyTriple } from './engine.mjs';
 
 // Configuration
 const REPO_OWNER = 'erensh27';
-const REPO_NAME = 'sum-of-three-cubes-114';
+const REPO_NAME = 'cubehunt114';
 
 const $ = id => document.getElementById(id);
 const fmt = n => (n != null ? Number(n).toLocaleString('en-US') : '—');
@@ -210,11 +210,11 @@ class App {
   async refreshLeaderboard() {
     const tryFetch = async filename => {
       const paths = [
-        `https://raw.githubusercontent.com/erensh27/cubehunt114/main/data/${filename}`,
-        `./data/${filename}`,
         `/data/${filename}`,
+        `./data/${filename}`,
         `../data/${filename}`,
-        `data/${filename}`
+        `data/${filename}`,
+        `https://raw.githubusercontent.com/erensh27/cubehunt114/main/data/${filename}`
       ];
       for (const p of paths) {
         try {

@@ -4,6 +4,7 @@
   "description": "Distributed mathematical search for x^3 + y^3 + z^3 = 114 using cubic-field norm sieves",
   "type": "module",
   "scripts": {
+    "build": "echo 'Static build ready'",
     "test": "python3 -m unittest discover -s tests -p test_search.py",
     "serve": "python3 -m http.server 8000"
   },
