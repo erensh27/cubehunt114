@@ -2,6 +2,7 @@
   "buildCommand": "echo 'Static build ready'",
   "outputDirectory": ".",
   "cleanUrls": false,
+  "ignoreCommand": "bash -c 'if [ \"$VERCEL_GIT_COMMIT_REF\" = \"data-archive\" ]; then exit 0; else exit 1; fi'",
   "rewrites": [
     { "source": "/web/data/(.*)", "destination": "/data/$1" },
     { "source": "/web/(.*)", "destination": "/$1" },
